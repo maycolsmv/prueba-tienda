@@ -2,7 +2,11 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
-export default defineConfig({
+// En GitHub Pages la app vive en https://maycolsmv.github.io/prueba-tienda/
+const BASE = '/prueba-tienda/';
+
+export default defineConfig(({ command, isPreview }) => ({
+  base: command === 'build' || isPreview ? BASE : '/',
   plugins: [
     react(),
     VitePWA({
@@ -16,7 +20,8 @@ export default defineConfig({
         theme_color: '#1f4e5f',
         background_color: '#f6f7f9',
         display: 'standalone',
-        start_url: '/',
+        start_url: '.',
+        scope: '.',
         icons: [
           { src: 'icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
           { src: 'icon-192.png', sizes: '192x192', type: 'image/png' },
@@ -26,8 +31,7 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
-        navigateFallback: '/index.html',
       },
     }),
   ],
-});
+}));
