@@ -1147,3 +1147,90 @@ input[type='checkbox'] {
 .pre-line {
   white-space: pre-line;
 }
+
+/* ---------- Vista previa del comprobante ---------- */
+
+.ticket-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 14px 0 4px;
+  background: var(--surface-2);
+  border-radius: 10px;
+  margin-top: 12px;
+}
+.ticket {
+  width: 100%;
+  max-width: 320px;
+  background: #fff;
+  color: #141414;
+  padding: 18px 16px 20px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  border-radius: 4px;
+}
+.ticket-center {
+  text-align: center;
+  margin-bottom: 8px;
+}
+.ticket-store {
+  font-size: 17px;
+  font-weight: 700;
+}
+.ticket-title {
+  font-weight: 700;
+  margin-top: 6px;
+}
+.ticket-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ticket-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+}
+.ticket-table th {
+  text-align: left;
+  border-bottom: 1px solid #555;
+  padding: 3px 2px;
+}
+.ticket-table td {
+  padding: 4px 2px;
+  vertical-align: top;
+}
+.ticket-qty {
+  text-align: center;
+  width: 32px;
+}
+.ticket-sub {
+  color: #666;
+  font-size: 11px;
+}
+.ticket-totals {
+  border-top: 1px solid #555;
+  padding-top: 6px;
+}
+.ticket-total {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 2px 0;
+}
+.ticket-void {
+  text-align: center;
+  color: #b40000;
+  font-weight: 700;
+  font-size: 15px;
+  margin-top: 8px;
+}
+.ticket-note {
+  font-style: italic;
+  margin-top: 8px;
+}
+.ticket-footer {
+  text-align: center;
+  color: #5a5a5a;
+  font-size: 11px;
+  margin-top: 12px;
+}

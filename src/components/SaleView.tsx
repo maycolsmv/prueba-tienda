@@ -1,17 +1,25 @@
+import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Link } from 'react-router-dom';
 import { db, type Sale } from '../lib/db';
 import { customerBalance, voidSale } from '../lib/ops';
 import { buildReceiptPdf, receiptFileName, shareReceipt } from '../lib/receipt';
-import { getSettings } from '../lib/settings';
+import { getSettings, useSettings } from '../lib/settings';
 import { fmtDateTime, fmtMoney } from '../lib/format';
-import { Modal, useAction, useConfirm } from './ui';
+import { Modal, Tabs, useAction, useConfirm } from './ui';
+import ReceiptPreview from './ReceiptPreview';
 
 export default function SaleView({ saleId, onClose, justCreated }: { saleId: number; onClose: () => void; justCreated?: boolean }) {
   const sale = useLiveQuery(() => db.sales.get(saleId), [saleId]);
   const customer = useLiveQuery(async () => (sale?.customerId ? db.customers.get(sale.customerId) : undefined), [sale?.customerId]);
   const { run, busy } = useAction();
   const confirm = useConfirm();
+  const settings = useSettings();
+  const [view, setView] = useState<'resumen' | 'comprobante'>(justCreated ? 'comprobante' : 'resumen');
+  const balance = useLiveQuery(
+    async () => (sale?.customerId && sale.paymentType === 'credito' ? customerBalance(sale.customerId) : null),
+    [sale?.customerId, sale?.paymentType],
+  );
 
   if (!sale) return null;
 
@@ -66,6 +74,20 @@ export default function SaleView({ saleId, onClose, justCreated }: { saleId: num
         </>
       }
     >
+      <Tabs
+        value={view}
+        onChange={setView}
+        options={[
+          { value: 'resumen', label: 'Resumen' },
+          { value: 'comprobante', label: 'Vista previa del comprobante' },
+        ]}
+      />
+      {view === 'comprobante' && settings && balance !== undefined && (
+        <div className="ticket-wrap">
+          <ReceiptPreview sale={sale} settings={settings} balance={balance} />
+        </div>
+      )}
+      {view === 'resumen' && (
       <div className="sale-summary">
         <div className="row-between">
           <span className="muted">No. {String(sale.number).padStart(5, '0')}</span>
@@ -140,6 +162,7 @@ export default function SaleView({ saleId, onClose, justCreated }: { saleId: num
           <p className="muted small">Sin celular del cliente: WhatsApp te pedirá elegir el contacto.</p>
         )}
       </div>
+      )}
     </Modal>
   );
 }
