@@ -1,13 +1,15 @@
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Link } from 'react-router-dom';
-import { db, methodLabel, type Sale } from '../lib/db';
+import { db, methodLabel, type Sale, type SaleAdjustment } from '../lib/db';
 import { customerBalance, voidSale } from '../lib/ops';
 import { buildReceiptPdf, receiptFileName, shareReceipt } from '../lib/receipt';
 import { getSettings, useSettings } from '../lib/settings';
 import { fmtDateTime, fmtMoney } from '../lib/format';
 import { Modal, Tabs, useAction, useConfirm } from './ui';
 import ReceiptPreview from './ReceiptPreview';
+import AdjustSale from './AdjustSale';
+import { Icon } from './Icon';
 
 export default function SaleView({ saleId, onClose, justCreated }: { saleId: number; onClose: () => void; justCreated?: boolean }) {
   const sale = useLiveQuery(() => db.sales.get(saleId), [saleId]);
@@ -15,6 +17,7 @@ export default function SaleView({ saleId, onClose, justCreated }: { saleId: num
   const customer = useLiveQuery(async () => (sale?.customerId ? db.customers.get(sale.customerId) : undefined), [sale?.customerId]);
   const { run, busy } = useAction();
   const confirm = useConfirm();
+  const [adjusting, setAdjusting] = useState<'cambio' | 'devolucion' | null>(null);
   const settings = useSettings();
   const [view, setView] = useState<'resumen' | 'comprobante'>(justCreated ? 'comprobante' : 'resumen');
   const balance = useLiveQuery(
@@ -62,9 +65,21 @@ export default function SaleView({ saleId, onClose, justCreated }: { saleId: num
       footer={
         <>
           {!justCreated && !sale.voided && (
-            <button className="btn btn-danger-ghost" onClick={doVoid} disabled={busy}>
-              Anular
-            </button>
+            <>
+              <button className="btn btn-danger-ghost" onClick={doVoid} disabled={busy} title="Anula la venta completa">
+                Anular
+              </button>
+              {sale.items.length > 0 && (
+                <>
+                  <button className="btn btn-ghost" onClick={() => setAdjusting('cambio')} disabled={busy}>
+                    Cambio
+                  </button>
+                  <button className="btn btn-ghost" onClick={() => setAdjusting('devolucion')} disabled={busy}>
+                    Devolución
+                  </button>
+                </>
+              )}
+            </>
           )}
           <button className="btn btn-ghost" onClick={download} disabled={busy}>
             Descargar PDF
@@ -173,11 +188,57 @@ export default function SaleView({ saleId, onClose, justCreated }: { saleId: num
           </div>
         )}
         {sale.notes && <p className="muted small">Nota: {sale.notes}</p>}
+        {!!sale.adjustments?.length && (
+          <div className="adj-history">
+            <h3 className="adj-title">Cambios y devoluciones</h3>
+            <ul className="list">
+              {sale.adjustments.map((a, k) => (
+                <li key={k} className="adj-entry">
+                  <div className="row-between">
+                    <span className={`badge ${a.type === 'cambio' ? 'badge-info' : 'badge-warn'}`}>
+                      <Icon name={a.type === 'cambio' ? 'sales' : 'arrowDown'} size={12} /> {a.type === 'cambio' ? 'Cambio' : 'Devolución'}
+                    </span>
+                    <span className="muted small">{fmtDateTime(a.date)}</span>
+                  </div>
+                  <div className="small">
+                    Devolvió: {a.returned.map((i) => `${i.qty}× ${i.name} (${i.size})`).join(', ')} · {fmtMoney(a.returnedValue)}
+                  </div>
+                  {a.added.length > 0 && (
+                    <div className="small">
+                      Se llevó: {a.added.map((i) => `${i.qty}× ${i.name} (${i.size})`).join(', ')} · {fmtMoney(a.addedValue)}
+                    </div>
+                  )}
+                  <div className="small">
+                    <strong>{settlementText(a)}</strong>
+                    {a.note && <span className="muted"> · {a.note}</span>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         {justCreated && !customer?.phone && (
           <p className="muted small">Sin celular del cliente: WhatsApp te pedirá elegir el contacto.</p>
         )}
       </div>
       )}
+      {adjusting && <AdjustSale sale={sale} type={adjusting} onClose={() => setAdjusting(null)} />}
     </Modal>
   );
+}
+
+function settlementText(a: SaleAdjustment) {
+  const money = a.payments.map((p) => `${methodLabel(p.method)} ${fmtMoney(p.amount)}`).join(' + ');
+  switch (a.settlement) {
+    case 'pago':
+      return `Pagó la diferencia: ${money}`;
+    case 'deuda':
+      return `Quedó debiendo ${fmtMoney(a.difference)}`;
+    case 'reembolso':
+      return `Se le devolvió ${money}`;
+    case 'descuento_deuda':
+      return `Se descontaron ${fmtMoney(-a.difference)} de su cuenta`;
+    default:
+      return 'Sin diferencia de precio';
+  }
 }

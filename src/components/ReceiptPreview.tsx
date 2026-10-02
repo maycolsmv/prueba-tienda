@@ -1,6 +1,6 @@
 import { methodLabel, type Sale } from '../lib/db';
 import type { StoreSettings } from '../lib/settings';
-import { fmtDateTime, fmtMoney } from '../lib/format';
+import { fmtDate, fmtDateTime, fmtMoney } from '../lib/format';
 
 /** Vista en pantalla del comprobante; replica el contenido del PDF (receipt.ts). */
 export default function ReceiptPreview({ sale, settings: s, balance }: { sale: Sale; settings: StoreSettings; balance: number | null }) {
@@ -88,6 +88,11 @@ export default function ReceiptPreview({ sale, settings: s, balance }: { sale: S
         )}
       </div>
       {sale.voided && <div className="ticket-void">ANULADA</div>}
+      {!!sale.adjustments?.length && (
+        <div className="ticket-note">
+          Incluye {sale.adjustments.map((a) => `${a.type === 'cambio' ? 'cambio' : 'devolución'} del ${fmtDate(a.date)}`).join(', ')}.
+        </div>
+      )}
       {sale.notes && <div className="ticket-note">Nota: {sale.notes}</div>}
       <div className="ticket-footer">{s.receiptFooter}</div>
     </div>

@@ -592,7 +592,7 @@ function MovementsTab() {
         <div className="row-between wrap gap">
           <select value={type} onChange={(e) => setType(e.target.value)}>
             <option value="">Todos los tipos</option>
-            {['entrada', 'venta', 'ajuste', 'conteo', 'anulacion', 'inicial', 'carga_viaje', 'regreso_viaje'].map((t) => (
+            {['entrada', 'venta', 'ajuste', 'conteo', 'anulacion', 'inicial', 'carga_viaje', 'regreso_viaje', 'devolucion', 'cambio'].map((t) => (
               <option key={t} value={t}>
                 {movementLabel(t)}
               </option>

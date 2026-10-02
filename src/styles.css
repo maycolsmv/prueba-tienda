@@ -2188,3 +2188,37 @@ a.kpi:hover {
 .dest-hint {
   color: var(--info);
 }
+
+/* =========================================================
+   Cambios y devoluciones
+   ========================================================= */
+.adj-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+.adj-row .qty span {
+  min-width: 24px;
+}
+.adj-pick {
+  max-height: 260px;
+}
+.adj-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.adj-history {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.adj-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 0;
+}

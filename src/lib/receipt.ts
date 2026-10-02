@@ -2,13 +2,13 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { methodLabel, type Sale } from './db';
 import type { StoreSettings } from './settings';
-import { fmtDateTime, fmtMoney } from './format';
+import { fmtDate, fmtDateTime, fmtMoney } from './format';
 
 const W = 80; // ancho de tiquete en mm
 const M = 5;
 
 export function buildReceiptPdf(sale: Sale, s: StoreSettings, balance: number | null): jsPDF {
-  const estimated = 100 + sale.payments.length * 5 + sale.items.length * 9 + (sale.notes ? 10 : 0) + (balance !== null ? 8 : 0);
+  const estimated = 100 + sale.payments.length * 5 + sale.items.length * 9 + (sale.notes ? 10 : 0) + (sale.adjustments?.length ? 10 : 0) + (balance !== null ? 8 : 0);
   const doc = new jsPDF({ unit: 'mm', format: [W, Math.max(140, estimated)] });
   const cx = W / 2;
   let y = 9;
@@ -82,6 +82,16 @@ export function buildReceiptPdf(sale: Sale, s: StoreSettings, balance: number | 
     doc.text('ANULADA', cx, y, { align: 'center' });
     doc.setTextColor(0);
     y += 5;
+  }
+  if (sale.adjustments?.length) {
+    y += 1;
+    doc.setFont('helvetica', 'italic').setFontSize(7.8);
+    const lines = doc.splitTextToSize(
+      `Incluye ${sale.adjustments.map((a) => `${a.type === 'cambio' ? 'cambio' : 'devolución'} del ${fmtDate(a.date)}`).join(', ')}.`,
+      W - 2 * M,
+    );
+    doc.text(lines, M, y);
+    y += lines.length * 3.4;
   }
   if (sale.notes) {
     y += 1;

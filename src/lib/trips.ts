@@ -52,13 +52,8 @@ export async function tripSummary(tripId: number): Promise<TripSummary | null> {
   const vm = new Map(variants.map((v) => [v.id, v]));
   const valid = sales.filter((s) => !s.voided);
 
-  const soldByVariant = new Map<number, number>();
   let cost = 0;
-  for (const s of valid)
-    for (const i of s.items) {
-      soldByVariant.set(i.variantId, (soldByVariant.get(i.variantId) ?? 0) + i.qty);
-      cost += i.qty * (pm.get(i.productId)?.cost ?? 0);
-    }
+  for (const s of valid) for (const i of s.items) cost += i.qty * (pm.get(i.productId)?.cost ?? 0);
 
   const lines: TripLine[] = items
     .map((it) => {
@@ -72,7 +67,8 @@ export async function tripSummary(tripId: number): Promise<TripSummary | null> {
         size: vm.get(it.variantId)?.size ?? '?',
         price: p?.price ?? 0,
         loaded: it.loaded,
-        sold: soldByVariant.get(it.variantId) ?? 0,
+        // Vendido = lo que salió y no volvió (cuadra con anulaciones, cambios y devoluciones)
+        sold: it.loaded - it.returned - it.onHand,
         onHand: it.onHand,
         returned: it.returned,
       };
@@ -111,7 +107,7 @@ export async function tripSummary(tripId: number): Promise<TripSummary | null> {
     methods,
     carteraOpen: open.reduce((a, c) => a + c.open, 0),
     carteraCustomers: new Set(open.map((c) => c.entry.customerId)).size,
-    credit: valid.filter((s) => s.paymentType === 'credito').reduce((a, s) => a + s.total - s.paid, 0),
+    credit: valid.filter((s) => s.paymentType === 'credito').reduce((a, s) => a + Math.max(0, s.total - s.paid), 0),
   };
 }
 
@@ -130,7 +126,7 @@ export async function tripList() {
       ...t,
       loaded: its.reduce((a, i) => a + i.loaded, 0),
       onHand: its.reduce((a, i) => a + i.onHand, 0),
-      sold: ss.reduce((a, s) => a + s.items.reduce((b, i) => b + i.qty, 0), 0),
+      sold: its.reduce((a, i) => a + i.loaded - i.returned - i.onHand, 0),
       total: ss.reduce((a, s) => a + s.total, 0),
       saleCount: ss.length,
       expenses: expenses.filter((e) => e.tripId === t.id).reduce((a, e) => a + e.amount, 0),

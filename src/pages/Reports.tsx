@@ -155,7 +155,7 @@ export default function Reports() {
       expenses: expenses.reduce((s, e) => s + e.amount, 0),
       destinations,
       home: { sales: homeSales.length, total: homeSales.reduce((a, x) => a + x.total, 0) },
-      abonos: ledger.filter((e) => e.type === 'abono' && !e.note.startsWith('Anulación')).reduce((a, e) => a + e.amount, 0),
+      abonos: ledger.filter((e) => e.type === 'abono' && e.method && e.saleId === null).reduce((a, e) => a + e.amount, 0),
     };
   }, [from, to]);
 

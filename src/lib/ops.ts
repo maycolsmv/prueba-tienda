@@ -10,7 +10,9 @@ import {
   type PaymentType,
   type Product,
   type Sale,
+  type SaleAdjustment,
   type SaleItem,
+  type Settlement,
   type Trip,
   type Variant,
 } from './db';
@@ -421,18 +423,9 @@ export async function voidSale(saleId: number) {
     const sale = await db.sales.get(saleId);
     if (!sale || sale.voided) throw new UserError('La venta ya está anulada.');
     const date = Date.now();
-    // Si la venta fue en un viaje que sigue abierto, las prendas vuelven al viaje; si no, a bodega.
-    const trip = sale.tripId ? await db.trips.get(sale.tripId) : undefined;
-    const toTrip = trip?.status === 'abierto';
-    for (const i of sale.items) {
-      if (toTrip && (await db.tripItems.where({ tripId: trip!.id, variantId: i.variantId }).first())) {
-        await moveTripStock(trip!.id, i.variantId, i.qty, 'anulacion', `Anulación venta #${sale.number}`, saleId, date);
-        continue;
-      }
-      const v = await db.variants.get(i.variantId);
-      if (v) await moveStock(i.variantId, i.qty, 'anulacion', `Anulación venta #${sale.number}`, saleId, date);
-    }
-    if (sale.customerId && sale.paymentType === 'credito') {
+    for (const i of sale.items) await returnToStock(sale, i, i.qty, 'anulacion', `Anulación venta #${sale.number}`, date);
+    // Reversa lo que quede pendiente de esta venta (crédito o diferencias de cambios que quedaron como deuda).
+    if (sale.customerId) {
       const related = await db.ledger.where('saleId').equals(saleId).toArray();
       const owed = related.reduce((s, e) => s + (e.type === 'cargo' ? e.amount : -e.amount), 0);
       if (owed > 0)
@@ -446,6 +439,158 @@ export async function voidSale(saleId: number) {
         } as never);
     }
     await db.sales.update(saleId, { voided: true });
+  });
+}
+
+/**
+ * Devuelve prendas de una venta al inventario:
+ * - venta de un viaje que sigue abierto → a la mercancía del viaje;
+ * - venta de un viaje ya cerrado → a bodega, y cuenta como devuelta de ese viaje (para que sus números cuadren);
+ * - venta desde bodega → a bodega.
+ */
+async function returnToStock(sale: Sale, line: SaleItem, qty: number, type: MovementType, note: string, date: number) {
+  const variantId = line.variantId;
+  const fromTrip = line.source ? line.source === 'viaje' : sale.tripId !== null;
+  const trip = fromTrip && sale.tripId ? await db.trips.get(sale.tripId) : undefined;
+  const item = trip ? await db.tripItems.where({ tripId: trip.id, variantId }).first() : undefined;
+  if (trip?.status === 'abierto' && item) return moveTripStock(trip.id, variantId, qty, type, note, sale.id, date);
+  if (!(await db.variants.get(variantId))) return; // la talla se eliminó: no hay a dónde devolver
+  await moveStock(variantId, qty, type, note, sale.id, date);
+  if (item) await db.tripItems.update(item.id, { returned: item.returned + qty });
+}
+
+// ---------- Cambios y devoluciones ----------
+
+export interface AdjustInput {
+  type: 'cambio' | 'devolucion';
+  /** Prendas que devuelve el cliente. */
+  returned: { variantId: number; qty: number }[];
+  /** Prendas nuevas (solo en cambio). */
+  added: SaleItem[];
+  settlement: Settlement;
+  /** Dinero cobrado (pago) o devuelto (reembolso). */
+  payments: Payment[];
+  note: string;
+}
+
+/** Valor de las prendas devueltas: precio de venta con el descuento proporcional de la venta. */
+export function returnValue(sale: Sale, returned: { variantId: number; qty: number }[]) {
+  const factor = sale.subtotal > 0 ? sale.total / sale.subtotal : 1;
+  let gross = 0;
+  for (const r of returned) {
+    const line = sale.items.find((i) => i.variantId === r.variantId);
+    if (line) gross += r.qty * line.price;
+  }
+  return Math.round(gross * factor);
+}
+
+export async function adjustSale(saleId: number, input: AdjustInput) {
+  const returned = input.returned.filter((r) => r.qty > 0);
+  const added = input.added.filter((a) => a.qty > 0);
+  if (!returned.length) throw new UserError('Elige al menos una prenda que devuelve el cliente.');
+  if (input.type === 'cambio' && !added.length) throw new UserError('Agrega la prenda que se lleva a cambio.');
+  if (input.type === 'devolucion' && added.length) throw new UserError('Una devolución no lleva prendas nuevas.');
+
+  const tables = [db.sales, db.variants, db.movements, db.ledger, db.trips, db.tripItems, db.customers];
+  return db.transaction('rw', tables, async () => {
+    const sale = await db.sales.get(saleId);
+    if (!sale) throw new UserError('La venta no existe.');
+    if (sale.voided) throw new UserError('La venta está anulada.');
+
+    // Lo devuelto no puede superar lo que tiene la venta
+    for (const r of returned) {
+      const have = sale.items.filter((i) => i.variantId === r.variantId).reduce((a, i) => a + i.qty, 0);
+      if (r.qty > have) throw new UserError('Se está devolviendo más de lo que tiene la venta.');
+    }
+    // Las prendas nuevas salen del mismo lugar que la venta: de la mercancía del viaje
+    // si la venta es del viaje abierto; si no, de bodega. Así lo que entra y sale cuadra.
+    const trip = await getActiveTrip();
+    const fromTrip = !!trip && sale.tripId === trip.id;
+    for (const a of added) {
+      const have = fromTrip
+        ? ((await db.tripItems.where({ tripId: trip!.id, variantId: a.variantId }).first())?.onHand ?? 0)
+        : ((await db.variants.get(a.variantId))?.stock ?? 0);
+      if (have < a.qty)
+        throw new UserError(`No hay existencias de ${a.name} talla ${a.size} ${fromTrip ? 'en el viaje' : 'en bodega'} (disponible: ${have}).`);
+    }
+
+    const returnedValue = returnValue(sale, returned);
+    const addedValue = added.reduce((t, a) => t + a.qty * a.price, 0);
+    const difference = addedValue - returnedValue;
+    const payments = mergePayments(input.payments);
+    const paid = payments.reduce((t, p) => t + p.amount, 0);
+
+    // Cómo se resuelve la diferencia
+    let settlement = input.settlement;
+    if (difference === 0) settlement = 'ninguno';
+    else if (difference > 0 && !['pago', 'deuda'].includes(settlement)) settlement = 'pago';
+    else if (difference < 0 && !['reembolso', 'descuento_deuda'].includes(settlement)) settlement = 'reembolso';
+    if ((settlement === 'deuda' || settlement === 'descuento_deuda') && !sale.customerId)
+      throw new UserError('La venta no tiene cliente: la diferencia se debe pagar o devolver en dinero.');
+    if (settlement === 'pago' && paid !== difference) throw new UserError('El pago no coincide con la diferencia a pagar.');
+    if (settlement === 'reembolso' && paid !== -difference) throw new UserError('El dinero devuelto no coincide con el saldo a favor.');
+
+    const date = Date.now();
+    const label = `${input.type === 'cambio' ? 'Cambio' : 'Devolución'} venta #${sale.number}`;
+
+    // Prendas de la venta: quitar lo devuelto (línea por línea, para saber a dónde vuelve cada una)
+    const items = sale.items.map((i) => ({ ...i }));
+    const returnedLines: SaleItem[] = [];
+    for (const r of returned) {
+      let left = r.qty;
+      for (const i of items) {
+        if (i.variantId !== r.variantId || left <= 0) continue;
+        const take = Math.min(left, i.qty);
+        i.qty -= take;
+        left -= take;
+        returnedLines.push({ ...i, qty: take });
+      }
+    }
+    const source: 'viaje' | 'bodega' = fromTrip ? 'viaje' : 'bodega';
+    const addedLines = added.map((a) => ({ ...a, source }));
+    for (const a of addedLines) {
+      const same = items.find((i) => i.variantId === a.variantId && i.price === a.price && (i.source ?? (sale.tripId ? 'viaje' : 'bodega')) === source);
+      if (same) same.qty += a.qty;
+      else items.push({ ...a });
+    }
+
+    // Inventario
+    for (const line of returnedLines) await returnToStock(sale, line, line.qty, 'devolucion', label, date);
+    for (const a of addedLines) {
+      if (fromTrip) await moveTripStock(trip!.id, a.variantId, -a.qty, 'cambio', label, sale.id, date);
+      else await moveStock(a.variantId, -a.qty, 'cambio', label, sale.id, date);
+    }
+    const netItems = items.filter((i) => i.qty > 0);
+    const subtotal = netItems.reduce((t, i) => t + i.qty * i.price, 0);
+    const total = sale.total - returnedValue + addedValue;
+
+    // Cartera
+    if (settlement === 'deuda')
+      await db.ledger.add({ customerId: sale.customerId, date, type: 'cargo', amount: difference, saleId, note: label, method: null, tripId: trip?.id ?? null } as never);
+    if (settlement === 'descuento_deuda')
+      await db.ledger.add({ customerId: sale.customerId, date, type: 'abono', amount: -difference, saleId, note: label, method: null, tripId: trip?.id ?? null } as never);
+
+    const adjustment: SaleAdjustment = {
+      date,
+      type: input.type,
+      returned: returnedLines,
+      added: addedLines,
+      returnedValue,
+      addedValue,
+      difference,
+      settlement,
+      payments: settlement === 'pago' || settlement === 'reembolso' ? payments : [],
+      note: input.note.trim(),
+      tripId: trip?.id ?? null,
+    };
+    await db.sales.update(saleId, {
+      items: netItems,
+      subtotal,
+      discount: Math.max(0, subtotal - total),
+      total,
+      adjustments: [...(sale.adjustments ?? []), adjustment],
+    });
+    return adjustment;
   });
 }
 

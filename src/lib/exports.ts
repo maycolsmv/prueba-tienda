@@ -15,6 +15,8 @@ const MOVEMENT_LABEL: Record<string, string> = {
   inicial: 'Existencia inicial',
   carga_viaje: 'Carga a viaje',
   regreso_viaje: 'Regreso de viaje',
+  devolucion: 'Devolución de cliente',
+  cambio: 'Cambio (sale)',
 };
 export const movementLabel = (t: string) => MOVEMENT_LABEL[t] ?? t;
 
@@ -37,7 +39,7 @@ function salesSheets(sales: Sale[], tripNames: Map<number, string>): Sheet[] {
         Transferencia: s.payments.filter((p) => p.method === 'transferencia').reduce((a, p) => a + p.amount, 0),
         OtroMedio: s.payments.filter((p) => p.method === 'otro').reduce((a, p) => a + p.amount, 0),
         Viaje: s.tripId ? (tripNames.get(s.tripId) ?? '') : '',
-        Estado: s.voided ? 'Anulada' : 'Activa',
+        Estado: s.voided ? 'Anulada' : s.adjustments?.length ? 'Con cambios/devoluciones' : 'Activa',
         Nota: s.notes,
       })),
     },

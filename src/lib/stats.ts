@@ -161,7 +161,13 @@ export function debtAging(ledger: LedgerEntry[], now = Date.now()) {
  */
 export function moneyByMethod(sales: Sale[], ledger: LedgerEntry[]) {
   const out: Record<PaymentMethod, number> = { efectivo: 0, nequi: 0, transferencia: 0, otro: 0 };
-  for (const s of sales) if (!s.voided) for (const p of s.payments ?? []) out[p.method] += p.amount;
+  for (const s of sales) {
+    if (s.voided) continue;
+    for (const p of s.payments ?? []) out[p.method] += p.amount;
+    // Cambios y devoluciones: lo cobrado suma, lo devuelto en dinero resta
+    for (const a of s.adjustments ?? [])
+      for (const p of a.payments) out[p.method] += a.settlement === 'reembolso' ? -p.amount : p.amount;
+  }
   for (const e of ledger) if (e.type === 'abono' && e.saleId === null && e.method) out[e.method] += e.amount;
   return out;
 }

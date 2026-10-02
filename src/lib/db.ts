@@ -39,6 +39,11 @@ export interface SaleItem {
   size: string;
   qty: number;
   price: number;
+  /**
+   * De dónde salió la prenda. Sin valor: del viaje de la venta (si tiene) o de bodega.
+   * Se marca en prendas que entran por un cambio, para devolverlas al mismo lugar.
+   */
+  source?: 'viaje' | 'bodega';
 }
 
 export type PaymentType = 'contado' | 'credito';
@@ -79,6 +84,37 @@ export interface Sale {
   tripId: number | null;
   notes: string;
   voided: boolean;
+  /**
+   * Cambios y devoluciones hechos después. `items`, `subtotal`, `discount` y `total`
+   * reflejan la venta ya ajustada; aquí queda el historial.
+   */
+  adjustments?: SaleAdjustment[];
+}
+
+/**
+ * Cómo se resolvió la diferencia de un cambio o devolución:
+ * pago = el cliente pagó; deuda = quedó debiendo; reembolso = se le devolvió dinero;
+ * descuento_deuda = se descontó de su deuda (o quedó saldo a favor); ninguno = no hubo diferencia.
+ */
+export type Settlement = 'pago' | 'deuda' | 'reembolso' | 'descuento_deuda' | 'ninguno';
+
+export interface SaleAdjustment {
+  date: number;
+  type: 'cambio' | 'devolucion';
+  /** Prendas que el cliente devolvió (con el precio al que se vendieron). */
+  returned: SaleItem[];
+  /** Prendas nuevas que se llevó en el cambio. */
+  added: SaleItem[];
+  /** Valor de lo devuelto, ya con el descuento proporcional de la venta. */
+  returnedValue: number;
+  addedValue: number;
+  /** addedValue − returnedValue: positivo = paga el cliente; negativo = a favor del cliente. */
+  difference: number;
+  settlement: Settlement;
+  /** Dinero cobrado (pago) o devuelto (reembolso), por medio. */
+  payments: Payment[];
+  note: string;
+  tripId: number | null;
 }
 
 /** Movimiento de cartera: cargo (deuda) o abono. */
@@ -104,7 +140,9 @@ export type MovementType =
   | 'anulacion'
   | 'inicial'
   | 'carga_viaje'
-  | 'regreso_viaje';
+  | 'regreso_viaje'
+  | 'devolucion'
+  | 'cambio';
 
 export interface Movement {
   id: number;
