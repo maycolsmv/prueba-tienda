@@ -1,5 +1,5 @@
 // Cálculos de solo lectura para el dashboard y los reportes. No modifica datos.
-import { db, type LedgerEntry, type Sale } from './db';
+import { db, type LedgerEntry, type PaymentMethod, type Sale } from './db';
 import { allBalances, isLowStock, loadCatalog, type ProductWithVariants } from './ops';
 import { compareSizes, toDateInput } from './format';
 
@@ -58,7 +58,7 @@ export const pctChange = (cur: number, prev: number) => (prev > 0 ? ((cur - prev
 export type StockStatus = 'disponible' | 'poco' | 'agotado';
 
 export function stockStatus(p: ProductWithVariants): StockStatus {
-  if (p.totalStock <= 0) return 'agotado';
+  if (p.totalStock + p.totalInTrip <= 0) return 'agotado';
   if (isLowStock(p)) return 'poco';
   return 'disponible';
 }
@@ -72,15 +72,18 @@ export const STATUS_LABEL: Record<StockStatus, string> = {
 export function inventorySummary(catalog: ProductWithVariants[]) {
   const counts = { disponible: 0, poco: 0, agotado: 0 };
   let units = 0;
+  let inTrip = 0;
   let value = 0;
   let cost = 0;
   for (const p of catalog) {
     counts[stockStatus(p)]++;
-    units += p.totalStock;
-    value += p.totalStock * p.price;
-    cost += p.totalStock * p.cost;
+    const owned = p.totalStock + p.totalInTrip;
+    units += owned;
+    inTrip += p.totalInTrip;
+    value += owned * p.price;
+    cost += owned * p.cost;
   }
-  return { counts, products: catalog.length, units, value, cost };
+  return { counts, products: catalog.length, units, inTrip, value, cost };
 }
 
 interface SalesAgg {
@@ -113,9 +116,29 @@ function aggregate(sales: Sale[], costOf: (productId: number) => number): SalesA
 const lineValue = (s: Sale, qty: number, price: number) => (s.subtotal > 0 ? Math.round((qty * price * s.total) / s.subtotal) : 0);
 
 /**
- * Antigüedad de la cartera: los abonos pagan primero las deudas más viejas (FIFO);
- * lo que queda pendiente de cada deuda se clasifica por su fecha.
+ * Deudas que siguen abiertas: los abonos de cada cliente pagan primero las más viejas (FIFO).
+ * La antigüedad de la cartera y la cartera de cada viaje se calculan con esto.
  */
+export function openCharges(ledger: LedgerEntry[]) {
+  const byCustomer = new Map<number, LedgerEntry[]>();
+  for (const e of ledger) {
+    const l = byCustomer.get(e.customerId) ?? [];
+    l.push(e);
+    byCustomer.set(e.customerId, l);
+  }
+  const out: { entry: LedgerEntry; open: number }[] = [];
+  for (const entries of byCustomer.values()) {
+    entries.sort((a, b) => a.date - b.date || a.id - b.id);
+    let paid = entries.filter((e) => e.type === 'abono').reduce((s, e) => s + e.amount, 0);
+    for (const c of entries.filter((e) => e.type === 'cargo')) {
+      const covered = Math.min(paid, c.amount);
+      paid -= covered;
+      if (c.amount - covered > 0) out.push({ entry: c, open: c.amount - covered });
+    }
+  }
+  return out;
+}
+
 export function debtAging(ledger: LedgerEntry[], now = Date.now()) {
   const buckets = [
     { label: '0–30 días', amount: 0 },
@@ -123,27 +146,24 @@ export function debtAging(ledger: LedgerEntry[], now = Date.now()) {
     { label: '61–90 días', amount: 0 },
     { label: 'Más de 90 días', amount: 0 },
   ];
-  const byCustomer = new Map<number, LedgerEntry[]>();
-  for (const e of ledger) {
-    const l = byCustomer.get(e.customerId) ?? [];
-    l.push(e);
-    byCustomer.set(e.customerId, l);
-  }
   const oldestByCustomer = new Map<number, number>();
-  for (const [cid, entries] of byCustomer) {
-    entries.sort((a, b) => a.date - b.date || a.id - b.id);
-    let paid = entries.filter((e) => e.type === 'abono').reduce((s, e) => s + e.amount, 0);
-    for (const c of entries.filter((e) => e.type === 'cargo')) {
-      const covered = Math.min(paid, c.amount);
-      paid -= covered;
-      const open = c.amount - covered;
-      if (open <= 0) continue;
-      const days = Math.floor((now - c.date) / DAY);
-      buckets[days <= 30 ? 0 : days <= 60 ? 1 : days <= 90 ? 2 : 3].amount += open;
-      if (!oldestByCustomer.has(cid)) oldestByCustomer.set(cid, days);
-    }
+  for (const { entry: c, open } of openCharges(ledger)) {
+    const days = Math.floor((now - c.date) / DAY);
+    buckets[days <= 30 ? 0 : days <= 60 ? 1 : days <= 90 ? 2 : 3].amount += open;
+    if (!oldestByCustomer.has(c.customerId)) oldestByCustomer.set(c.customerId, days);
   }
   return { buckets, oldestByCustomer };
+}
+
+/**
+ * Dinero recibido por medio de pago en un rango: lo pagado en las ventas (no anuladas)
+ * más los abonos posteriores a cartera. Los abonos iniciales ya están en el pago de la venta.
+ */
+export function moneyByMethod(sales: Sale[], ledger: LedgerEntry[]) {
+  const out: Record<PaymentMethod, number> = { efectivo: 0, nequi: 0, transferencia: 0, otro: 0 };
+  for (const s of sales) if (!s.voided) for (const p of s.payments ?? []) out[p.method] += p.amount;
+  for (const e of ledger) if (e.type === 'abono' && e.saleId === null && e.method) out[e.method] += e.amount;
+  return out;
 }
 
 const WEEKDAYS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
@@ -278,6 +298,10 @@ export async function dashboardData(key: PeriodKey) {
     top,
     sizes,
     payment: { contado: a.contado, credito: a.credito },
+    methods: moneyByMethod(
+      cur,
+      ledger.filter((e) => e.date >= current.from && e.date <= current.to),
+    ),
     inventory: inv,
     weekday,
     low: low.slice(0, 6),

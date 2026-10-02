@@ -1,4 +1,4 @@
-import type { Sale } from '../lib/db';
+import { methodLabel, type Sale } from '../lib/db';
 import type { StoreSettings } from '../lib/settings';
 import { fmtDateTime, fmtMoney } from '../lib/format';
 
@@ -61,10 +61,17 @@ export default function ReceiptPreview({ sale, settings: s, balance }: { sale: S
           <span>TOTAL</span>
           <span>{fmtMoney(sale.total)}</span>
         </div>
+        {sale.paymentType === 'contado' &&
+          sale.payments.map((p) => (
+            <div key={p.method} className="ticket-row">
+              <span>{methodLabel(p.method)}</span>
+              <span>{fmtMoney(p.amount)}</span>
+            </div>
+          ))}
         {sale.paymentType === 'credito' && (
           <>
             <div className="ticket-row">
-              <span>Abonado</span>
+              <span>Abonado{sale.payments.length ? ` (${sale.payments.map((p) => methodLabel(p.method)).join(', ')})` : ''}</span>
               <span>{fmtMoney(sale.paid)}</span>
             </div>
             <div className="ticket-row">

@@ -5,9 +5,9 @@ import { db } from '../lib/db';
 import { allBalances, loadCatalog } from '../lib/ops';
 import { endOfDay, fmtDate, fmtMoney, fmtNum, startOfDay, toDateInput } from '../lib/format';
 import { exportXlsx } from '../lib/excel';
-import { debtAging } from '../lib/stats';
+import { debtAging, moneyByMethod } from '../lib/stats';
 import { Field, PageHeader, Tabs } from '../components/ui';
-import { ChartCard, ChartEmpty, ColumnChart, fmtPct, SegmentBar, ShareBars, TrendChart, useChartColors } from '../components/charts';
+import { ChartCard, ChartEmpty, ColumnChart, fmtPct, MethodsBar, SegmentBar, ShareBars, TrendChart, useChartColors } from '../components/charts';
 
 type Tab = 'ventas' | 'top' | 'rotacion' | 'existencias' | 'cartera';
 
@@ -117,6 +117,7 @@ export default function Reports() {
       byCat: [...byCat.entries()].sort((x, y) => y[1].units - x[1].units),
       debtors,
       aging: buckets,
+      methods: moneyByMethod(valid, ledger),
       cartera: debtors.reduce((a, c) => a + c.balance, 0),
       abonos: ledger.filter((e) => e.type === 'abono' && !e.note.startsWith('Anulación')).reduce((a, e) => a + e.amount, 0),
     };
@@ -145,6 +146,10 @@ export default function Reports() {
           { Concepto: 'Ganancia bruta', Valor: r.total - r.cost },
           { Concepto: 'Margen bruto %', Valor: r.total ? Math.round(((r.total - r.cost) / r.total) * 1000) / 10 : 0 },
           { Concepto: 'Abonos recibidos', Valor: r.abonos },
+          { Concepto: 'Recibido en efectivo', Valor: r.methods.efectivo },
+          { Concepto: 'Recibido por Nequi', Valor: r.methods.nequi },
+          { Concepto: 'Recibido por transferencia', Valor: r.methods.transferencia },
+          { Concepto: 'Recibido por otro medio', Valor: r.methods.otro },
           { Concepto: 'Cartera total por cobrar', Valor: r.cartera },
         ],
       },
@@ -256,6 +261,9 @@ export default function Reports() {
                   { label: 'Crédito', value: r.credito, color: c.series[1] },
                 ]}
               />
+              <h2 style={{ margin: '8px 0 0' }}>Dinero recibido</h2>
+              <p className="chart-sub" style={{ marginTop: -8 }}>Por medio de pago (ventas y abonos)</p>
+              <MethodsBar methods={r.methods} />
             </ChartCard>
           </div>
           {r.days.length > 0 && (

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Link } from 'react-router-dom';
-import { db, type Sale } from '../lib/db';
+import { db, methodLabel, type Sale } from '../lib/db';
 import { customerBalance, voidSale } from '../lib/ops';
 import { buildReceiptPdf, receiptFileName, shareReceipt } from '../lib/receipt';
 import { getSettings, useSettings } from '../lib/settings';
@@ -11,6 +11,7 @@ import ReceiptPreview from './ReceiptPreview';
 
 export default function SaleView({ saleId, onClose, justCreated }: { saleId: number; onClose: () => void; justCreated?: boolean }) {
   const sale = useLiveQuery(() => db.sales.get(saleId), [saleId]);
+  const trip = useLiveQuery(async () => (sale?.tripId ? db.trips.get(sale.tripId) : undefined), [sale?.tripId]);
   const customer = useLiveQuery(async () => (sale?.customerId ? db.customers.get(sale.customerId) : undefined), [sale?.customerId]);
   const { run, busy } = useAction();
   const confirm = useConfirm();
@@ -110,6 +111,20 @@ export default function SaleView({ saleId, onClose, justCreated }: { saleId: num
             {sale.paymentType === 'credito' ? 'Crédito' : 'Contado'}
           </span>
         </div>
+        {sale.payments.length > 0 && (
+          <div className="row-between">
+            <span>{sale.paymentType === 'credito' ? 'Abono inicial' : 'Medio de pago'}</span>
+            <span className="small right-inline">{sale.payments.map((p) => `${methodLabel(p.method)} ${fmtMoney(p.amount)}`).join(' · ')}</span>
+          </div>
+        )}
+        {trip && (
+          <div className="row-between">
+            <span>Viaje</span>
+            <Link to={`/viajes/${trip.id}`} className="link" onClick={onClose}>
+              {trip.destination}
+            </Link>
+          </div>
+        )}
         <table className="table compact">
           <thead>
             <tr>

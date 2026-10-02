@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type PaymentType, type SaleItem } from '../lib/db';
-import { createSale, customerBalance, loadCatalog, type ProductWithVariants } from '../lib/ops';
+import { Link } from 'react-router-dom';
+import { db, type Payment, type PaymentType, type SaleItem } from '../lib/db';
+import { createSale, customerBalance, getActiveTrip, loadCatalog, type ProductWithVariants } from '../lib/ops';
 import { fmtMoney, normalize } from '../lib/format';
 import { Empty, Field, MoneyInput, PageHeader, SearchBox, useAction, useConfirm } from '../components/ui';
 import CustomerForm from '../components/CustomerForm';
 import SaleView from '../components/SaleView';
+import PaymentsEditor, { effectivePayments } from '../components/PaymentsEditor';
+import { Icon } from '../components/Icon';
 
 function matches(p: ProductWithVariants, q: string) {
   const n = normalize(q);
@@ -14,6 +17,7 @@ function matches(p: ProductWithVariants, q: string) {
 
 export default function NewSale() {
   const catalog = useLiveQuery(() => loadCatalog(), []);
+  const trip = useLiveQuery(async () => (await getActiveTrip()) ?? null, []);
   const customers = useLiveQuery(() => db.customers.orderBy('name').toArray(), []);
   const [q, setQ] = useState('');
   const [open, setOpen] = useState<number | null>(null);
@@ -23,7 +27,7 @@ export default function NewSale() {
   const [newCustomer, setNewCustomer] = useState(false);
   const [discount, setDiscount] = useState(0);
   const [payment, setPayment] = useState<PaymentType>('contado');
-  const [paid, setPaid] = useState(0);
+  const [payments, setPayments] = useState<Payment[]>([{ method: 'efectivo', amount: 0 }]);
   const [notes, setNotes] = useState('');
   const [doneId, setDoneId] = useState<number | null>(null);
   const { run, busy } = useAction();
@@ -41,11 +45,16 @@ export default function NewSale() {
   const customer = customers?.find((c) => c.id === customerId);
   const balance = useLiveQuery(async () => (customerId ? customerBalance(customerId) : 0), [customerId]);
 
+  const avail = (v: { stock: number; inTrip: number }) => (trip ? v.inTrip : v.stock);
+  const availTotal = (p: ProductWithVariants) => (trip ? p.totalInTrip : p.totalStock);
+
   const results = useMemo(() => {
-    if (!catalog) return [];
-    const list = q.trim() ? catalog.filter((p) => matches(p, q)) : catalog;
-    return list.slice(0, 30);
-  }, [catalog, q]);
+    if (!catalog || trip === undefined) return [];
+    // En viaje solo se muestra lo que se lleva.
+    const base = trip ? catalog.filter((p) => p.totalInTrip > 0) : catalog;
+    const list = q.trim() ? base.filter((p) => matches(p, q)) : base;
+    return list.slice(0, 40);
+  }, [catalog, q, trip]);
 
   const custResults = useMemo(() => {
     if (!customers || !custQ.trim()) return [];
@@ -55,7 +64,7 @@ export default function NewSale() {
 
   const inCart = (variantId: number) => cart.filter((i) => i.variantId === variantId).reduce((s, i) => s + i.qty, 0);
   const stockOf = (variantId: number) => {
-    for (const p of catalog ?? []) for (const v of p.variants) if (v.id === variantId) return v.stock;
+    for (const p of catalog ?? []) for (const v of p.variants) if (v.id === variantId) return avail(v);
     return 0;
   };
 
@@ -77,6 +86,9 @@ export default function NewSale() {
   const subtotal = cart.reduce((s, i) => s + i.qty * i.price, 0);
   const total = Math.max(0, subtotal - discount);
   const overStock = cart.some((i) => inCart(i.variantId) > stockOf(i.variantId));
+  const effective = effectivePayments(payments, payment, total);
+  const paidNow = effective.reduce((a, p) => a + (p.amount || 0), 0);
+  const paymentsOk = payment === 'contado' ? paidNow === total : paidNow <= total;
 
   const reset = () => {
     setCart([]);
@@ -84,7 +96,7 @@ export default function NewSale() {
     setCustQ('');
     setDiscount(0);
     setPayment('contado');
-    setPaid(0);
+    setPayments([{ method: 'efectivo', amount: 0 }]);
     setNotes('');
     setQ('');
     setOpen(null);
@@ -92,7 +104,7 @@ export default function NewSale() {
 
   const submit = async () => {
     const sale = await run(() =>
-      createSale({ customerId, items: cart, discount, paymentType: payment, paid, notes }),
+      createSale({ customerId, items: cart, discount, paymentType: payment, payments: effectivePayments(payments, payment, total), notes }),
     );
     if (sale) {
       reset();
@@ -103,10 +115,41 @@ export default function NewSale() {
   return (
     <div className="page">
       <PageHeader title="Nueva venta" />
+      {trip !== undefined && (
+        <div className={`sell-source ${trip ? 'trip' : ''}`}>
+          <span className="sell-source-icon">
+            <Icon name={trip ? 'plane' : 'warehouse'} size={20} />
+          </span>
+          <div className="grow">
+            {trip ? (
+              <>
+                <strong>Vendiendo en viaje: {trip.destination}</strong>
+                <div className="small">
+                  Las ventas descuentan de la mercancía que llevas ({catalog?.reduce((a, p) => a + p.totalInTrip, 0) ?? 0} und
+                  disponibles).
+                </div>
+              </>
+            ) : (
+              <>
+                <strong>Vendiendo desde bodega</strong>
+                <div className="small">No hay un viaje abierto.</div>
+              </>
+            )}
+          </div>
+          <Link to={trip ? `/viajes/${trip.id}` : '/viajes'} className="btn btn-sm btn-ghost">
+            {trip ? 'Ver viaje' : 'Viajes'}
+          </Link>
+        </div>
+      )}
       <div className="sale-layout">
         <section className="card">
           <SearchBox value={q} onChange={setQ} placeholder="Buscar producto por nombre, referencia o categoría" />
           {catalog && catalog.length === 0 && <Empty>No hay productos. Créalos en Productos.</Empty>}
+          {catalog && trip && results.length === 0 && !q && (
+            <Empty>
+              No llevas mercancía en este viaje. <Link to={`/viajes/${trip.id}`}>Cargar mercancía</Link>
+            </Empty>
+          )}
           <ul className="list product-pick">
             {results.map((p) => (
               <li key={p.id}>
@@ -120,13 +163,15 @@ export default function NewSale() {
                   </div>
                   <div className="right">
                     <div>{fmtMoney(p.price)}</div>
-                    <div className={`small ${p.totalStock ? 'muted' : 'text-danger'}`}>{p.totalStock} und</div>
+                    <div className={`small ${availTotal(p) ? 'muted' : 'text-danger'}`}>
+                      {availTotal(p)} und{trip ? ' en viaje' : ''}
+                    </div>
                   </div>
                 </button>
                 {open === p.id && (
                   <div className="sizes">
-                    {p.variants.map((v) => {
-                      const left = v.stock - inCart(v.id);
+                    {p.variants.filter((v) => !trip || v.inTrip > 0).map((v) => {
+                      const left = avail(v) - inCart(v.id);
                       return (
                         <button key={v.id} className="size-chip" disabled={left <= 0} onClick={() => add(p, v.id)}>
                           <strong>{v.size}</strong>
@@ -226,10 +271,22 @@ export default function NewSale() {
             <div className="grid-2">
               <Field label="Forma de pago">
                 <div className="segmented">
-                  <button className={payment === 'contado' ? 'active' : ''} onClick={() => setPayment('contado')}>
+                  <button
+                    className={payment === 'contado' ? 'active' : ''}
+                    onClick={() => {
+                      setPayment('contado');
+                      setPayments([{ method: 'efectivo', amount: 0 }]);
+                    }}
+                  >
                     Contado
                   </button>
-                  <button className={payment === 'credito' ? 'active' : ''} onClick={() => setPayment('credito')}>
+                  <button
+                    className={payment === 'credito' ? 'active' : ''}
+                    onClick={() => {
+                      setPayment('credito');
+                      setPayments([]);
+                    }}
+                  >
                     Crédito
                   </button>
                 </div>
@@ -238,11 +295,12 @@ export default function NewSale() {
                 <MoneyInput value={discount} onChange={setDiscount} />
               </Field>
             </div>
-            {payment === 'credito' && (
-              <Field label="Abono inicial" hint={customer ? undefined : 'Selecciona un cliente para vender a crédito.'}>
-                <MoneyInput value={paid} onChange={(n) => setPaid(Math.min(n, total))} />
-              </Field>
-            )}
+            <Field
+              label={payment === 'contado' ? 'Medio de pago' : 'Abono inicial (opcional)'}
+              hint={payment === 'credito' && !customer ? 'Selecciona un cliente para vender a crédito.' : undefined}
+            >
+              <PaymentsEditor mode={payment} total={total} value={payments} onChange={setPayments} />
+            </Field>
             <Field label="Nota">
               <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Opcional" />
             </Field>
@@ -262,7 +320,7 @@ export default function NewSale() {
             {payment === 'credito' && (
               <div className="row-between muted">
                 <span>Queda debiendo</span>
-                <span>{fmtMoney(total - paid)}</span>
+                <span>{fmtMoney(total - paidNow)}</span>
               </div>
             )}
           </div>
@@ -274,7 +332,7 @@ export default function NewSale() {
             )}
             <button
               className="btn btn-primary btn-lg grow"
-              disabled={busy || !cart.length || overStock || (payment === 'credito' && !customerId)}
+              disabled={busy || !cart.length || overStock || !paymentsOk || (payment === 'credito' && !customerId)}
               onClick={submit}
             >
               Registrar venta · {fmtMoney(total)}

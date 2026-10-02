@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '../lib/db';
+import { db, methodLabel, PAYMENT_METHODS, type PaymentMethod } from '../lib/db';
 import { addLedgerEntry } from '../lib/ops';
 import { fmtDateTime, fmtMoney } from '../lib/format';
 import { waNumber } from '../lib/receipt';
@@ -125,7 +125,10 @@ export default function CustomerDetail() {
                 {ledger.map((e) => (
                   <tr key={e.id}>
                     <td className="small nowrap">{fmtDateTime(e.date)}</td>
-                    <td className="small">{e.note || (e.type === 'cargo' ? 'Deuda' : 'Abono')}</td>
+                    <td className="small">
+                      {e.note || (e.type === 'cargo' ? 'Deuda' : 'Abono')}
+                      {e.type === 'abono' && e.method && <span className="badge no-dot badge-info method-badge">{methodLabel(e.method)}</span>}
+                    </td>
                     <td className="num">{e.type === 'cargo' ? fmtMoney(e.amount) : ''}</td>
                     <td className="num text-ok">{e.type === 'abono' ? fmtMoney(e.amount) : ''}</td>
                     <td className="num">{fmtMoney(e.balance)}</td>
@@ -184,10 +187,11 @@ function LedgerModal({
 }) {
   const [amount, setAmount] = useState(0);
   const [note, setNote] = useState('');
+  const [method, setMethod] = useState<PaymentMethod>('efectivo');
   const { run, busy } = useAction();
   const save = async () => {
     const ok = await run(async () => {
-      await addLedgerEntry(customerId, type, amount, note);
+      await addLedgerEntry(customerId, type, amount, note, type === 'abono' ? method : null);
       return true;
     }, type === 'abono' ? 'Abono registrado' : 'Deuda registrada');
     if (ok) onClose();
@@ -225,7 +229,18 @@ function LedgerModal({
             Pagar todo ({fmtMoney(balance)})
           </button>
         )}
-        <Field label={type === 'abono' ? 'Nota (efectivo, transferencia…)' : 'Concepto'}>
+        {type === 'abono' && (
+          <Field label="Medio de pago">
+            <div className="segmented method-pick">
+              {PAYMENT_METHODS.map((m) => (
+                <button key={m.value} type="button" className={method === m.value ? 'active' : ''} onClick={() => setMethod(m.value)}>
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </Field>
+        )}
+        <Field label={type === 'abono' ? 'Nota (opcional)' : 'Concepto'}>
           <input value={note} onChange={(e) => setNote(e.target.value)} />
         </Field>
       </div>

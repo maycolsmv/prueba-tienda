@@ -81,6 +81,7 @@ function StockTab({ onlyLow }: { onlyLow: boolean }) {
           </div>
           <div className="kpi-value">{fmtNum(summary.units)}</div>
           <div className="kpi-foot">
+            {summary.inTrip > 0 && <span className="badge no-dot badge-info">{summary.inTrip} en viaje</span>}
             Costo {fmtMoney(summary.cost)} · Venta {fmtMoney(summary.value)}
           </div>
         </div>
@@ -161,11 +162,12 @@ function StockTab({ onlyLow }: { onlyLow: boolean }) {
                       {p.variants.map((v) => (
                         <button
                           key={v.id}
-                          className={`size-tag clickable ${v.stock <= 0 ? 'zero' : ''}`}
-                          title="Ajustar existencia"
+                          className={`size-tag clickable ${v.stock <= 0 && v.inTrip <= 0 ? 'zero' : ''}`}
+                          title={v.inTrip ? `Bodega ${v.stock} · en viaje ${v.inTrip}. Toca para ajustar bodega.` : 'Ajustar existencia'}
                           onClick={() => setAdjust({ p, v })}
                         >
                           {v.size} <b>{v.stock}</b>
+                          {v.inTrip > 0 && <span className="in-trip">+{v.inTrip}✈</span>}
                         </button>
                       ))}
                     </div>
@@ -174,7 +176,7 @@ function StockTab({ onlyLow }: { onlyLow: boolean }) {
                     <StockBar p={p} />
                   </td>
                   <td data-label="Valor" className="num">
-                    {fmtMoney(p.totalStock * p.cost)}
+                    {fmtMoney((p.totalStock + p.totalInTrip) * p.cost)}
                   </td>
                   <td data-label="Estado">
                     <ProductStatus p={p} />
@@ -590,7 +592,7 @@ function MovementsTab() {
         <div className="row-between wrap gap">
           <select value={type} onChange={(e) => setType(e.target.value)}>
             <option value="">Todos los tipos</option>
-            {['entrada', 'venta', 'ajuste', 'conteo', 'anulacion', 'inicial'].map((t) => (
+            {['entrada', 'venta', 'ajuste', 'conteo', 'anulacion', 'inicial', 'carga_viaje', 'regreso_viaje'].map((t) => (
               <option key={t} value={t}>
                 {movementLabel(t)}
               </option>
@@ -625,7 +627,10 @@ function MovementsTab() {
                       {p?.name ?? '(eliminado)'} <span className="muted">({data!.vm.get(m.variantId)?.size ?? '?'})</span>
                       <div className="muted small">{m.note}</div>
                     </td>
-                    <td className="small">{movementLabel(m.type)}</td>
+                    <td className="small">
+                      {movementLabel(m.type)}
+                      {m.tripId ? <div className="muted">en viaje</div> : null}
+                    </td>
                     <td className={`num ${m.qty > 0 ? 'text-ok' : 'text-danger'}`}>{m.qty > 0 ? `+${m.qty}` : m.qty}</td>
                     <td className="num">{m.stockAfter}</td>
                   </tr>

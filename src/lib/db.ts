@@ -42,6 +42,23 @@ export interface SaleItem {
 
 export type PaymentType = 'contado' | 'credito';
 
+export type PaymentMethod = 'efectivo' | 'nequi' | 'transferencia' | 'otro';
+
+export const PAYMENT_METHODS: { value: PaymentMethod; label: string }[] = [
+  { value: 'efectivo', label: 'Efectivo' },
+  { value: 'nequi', label: 'Nequi' },
+  { value: 'transferencia', label: 'Transferencia' },
+  { value: 'otro', label: 'Otro' },
+];
+
+export const methodLabel = (m: PaymentMethod | null | undefined) =>
+  PAYMENT_METHODS.find((x) => x.value === m)?.label ?? 'Sin especificar';
+
+export interface Payment {
+  method: PaymentMethod;
+  amount: number;
+}
+
 export interface Sale {
   id: number;
   number: number;
@@ -53,8 +70,12 @@ export interface Sale {
   discount: number;
   total: number;
   paymentType: PaymentType;
-  /** Valor pagado en el momento de la venta (en crédito puede ser un abono inicial). */
+  /** Valor pagado en el momento de la venta (en crédito puede ser un abono inicial). Igual a la suma de `payments`. */
   paid: number;
+  /** Cómo se pagó lo que se recibió en el momento de la venta (puede ser más de un medio). */
+  payments: Payment[];
+  /** Viaje en el que se hizo la venta (null = venta desde bodega). */
+  tripId: number | null;
   notes: string;
   voided: boolean;
 }
@@ -68,9 +89,21 @@ export interface LedgerEntry {
   amount: number;
   saleId: number | null;
   note: string;
+  /** Medio de pago de un abono (null en deudas o registros anteriores a la versión 2). */
+  method?: PaymentMethod | null;
+  /** Viaje activo cuando se registró (para saber qué se cobró en cada destino). */
+  tripId?: number | null;
 }
 
-export type MovementType = 'entrada' | 'venta' | 'ajuste' | 'conteo' | 'anulacion' | 'inicial';
+export type MovementType =
+  | 'entrada'
+  | 'venta'
+  | 'ajuste'
+  | 'conteo'
+  | 'anulacion'
+  | 'inicial'
+  | 'carga_viaje'
+  | 'regreso_viaje';
 
 export interface Movement {
   id: number;
@@ -83,6 +116,37 @@ export interface Movement {
   stockAfter: number;
   note: string;
   refId: number | null;
+  /**
+   * Si tiene valor, el movimiento es sobre la mercancía que va en ese viaje
+   * (y `stockAfter` es lo que queda en el viaje). Sin valor = bodega.
+   */
+  tripId?: number | null;
+}
+
+export interface Trip {
+  id: number;
+  destination: string;
+  startDate: number;
+  /** Regreso planeado (o real, al cerrar). */
+  endDate: number | null;
+  notes: string;
+  status: 'abierto' | 'cerrado';
+  createdAt: number;
+  closedAt: number | null;
+}
+
+/** Mercancía de una talla que va en un viaje. */
+export interface TripItem {
+  id: number;
+  tripId: number;
+  productId: number;
+  variantId: number;
+  /** Unidades cargadas en total (se puede cargar varias veces). */
+  loaded: number;
+  /** Unidades que todavía lleva en el viaje. */
+  onHand: number;
+  /** Unidades devueltas a bodega (al cerrar o antes). */
+  returned: number;
 }
 
 export interface CountLine {
@@ -118,6 +182,8 @@ export const db = new Dexie('tienda-ropa') as Dexie & {
   movements: EntityTable<Movement, 'id'>;
   counts: EntityTable<InventoryCount, 'id'>;
   settings: EntityTable<Setting, 'key'>;
+  trips: EntityTable<Trip, 'id'>;
+  tripItems: EntityTable<TripItem, 'id'>;
 };
 
 db.version(1).stores({
@@ -131,6 +197,41 @@ db.version(1).stores({
   settings: 'key',
 });
 
+/**
+ * Completa una venta guardada antes de la versión 2 (sin medios de pago ni viaje).
+ * Lo pagado en el momento se toma como efectivo. Se usa en la migración y al restaurar respaldos viejos.
+ */
+export function migrateSaleV2(s: Partial<Sale>) {
+  if (!Array.isArray(s.payments)) s.payments = (s.paid ?? 0) > 0 ? [{ method: 'efectivo', amount: s.paid! }] : [];
+  if (s.tripId === undefined) s.tripId = null;
+  return s;
+}
+
+/** Abonos anteriores a la versión 2: se asumen en efectivo. */
+export function migrateLedgerV2(e: Partial<LedgerEntry>) {
+  if (e.method === undefined) e.method = e.type === 'abono' && !e.note?.startsWith('Anulación') ? 'efectivo' : null;
+  if (e.tripId === undefined) e.tripId = null;
+  return e;
+}
+
+// Versión 2: viajes y medios de pago. Los datos existentes se conservan y se completan.
+db.version(2)
+  .stores({
+    sales: '++id, &number, date, customerId, tripId',
+    ledger: '++id, customerId, date, saleId, tripId',
+    movements: '++id, date, productId, variantId, type, tripId',
+    trips: '++id, status, startDate, destination',
+    tripItems: '++id, tripId, variantId, [tripId+variantId]',
+  })
+  .upgrade(async (tx) => {
+    await tx.table('sales').toCollection().modify((s: Sale) => {
+      migrateSaleV2(s);
+    });
+    await tx.table('ledger').toCollection().modify((e: LedgerEntry) => {
+      migrateLedgerV2(e);
+    });
+  });
+
 export const TABLES = [
   'products',
   'variants',
@@ -140,4 +241,6 @@ export const TABLES = [
   'movements',
   'counts',
   'settings',
+  'trips',
+  'tripItems',
 ] as const;

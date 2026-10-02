@@ -3,10 +3,13 @@ import {
   type CountLine,
   type Customer,
   type MovementType,
+  type Payment,
+  type PaymentMethod,
   type PaymentType,
   type Product,
   type Sale,
   type SaleItem,
+  type Trip,
   type Variant,
 } from './db';
 import { getSettings, saveSettings } from './settings';
@@ -37,6 +40,35 @@ async function moveStock(
     refId,
   } as never);
   return stockAfter;
+}
+
+/** Mueve unidades de la mercancía que va en un viaje (no toca bodega). */
+async function moveTripStock(
+  tripId: number,
+  variantId: number,
+  delta: number,
+  type: MovementType,
+  note: string,
+  refId: number | null = null,
+  date = Date.now(),
+) {
+  const item = await db.tripItems.where({ tripId, variantId }).first();
+  if (!item) throw new UserError('Esa talla no va en el viaje.');
+  const onHand = item.onHand + delta;
+  if (onHand < 0) throw new UserError('No hay suficientes unidades en el viaje.');
+  await db.tripItems.update(item.id, { onHand });
+  await db.movements.add({
+    date,
+    productId: item.productId,
+    variantId,
+    type,
+    qty: delta,
+    stockAfter: onHand,
+    note,
+    refId,
+    tripId,
+  } as never);
+  return onHand;
 }
 
 // ---------- Productos ----------
@@ -118,29 +150,49 @@ export async function deleteProduct(productId: number) {
   return 'eliminado' as const;
 }
 
+export interface VariantWithTrip extends Variant {
+  /** Unidades de esta talla que van en el viaje abierto. */
+  inTrip: number;
+}
+
 export interface ProductWithVariants extends Product {
-  variants: Variant[];
+  variants: VariantWithTrip[];
+  /** Unidades en bodega. */
   totalStock: number;
+  /** Unidades que van en el viaje abierto. */
+  totalInTrip: number;
 }
 
 export async function loadCatalog(includeInactive = false): Promise<ProductWithVariants[]> {
-  const [products, variants] = await Promise.all([db.products.toArray(), db.variants.toArray()]);
-  const byProduct = new Map<number, Variant[]>();
+  const trip = await getActiveTrip();
+  const [products, variants, items] = await Promise.all([
+    db.products.toArray(),
+    db.variants.toArray(),
+    trip ? db.tripItems.where('tripId').equals(trip.id).toArray() : Promise.resolve([]),
+  ]);
+  const inTrip = new Map(items.map((i) => [i.variantId, i.onHand]));
+  const byProduct = new Map<number, VariantWithTrip[]>();
   for (const v of variants) {
     const list = byProduct.get(v.productId) ?? [];
-    list.push(v);
+    list.push({ ...v, inTrip: inTrip.get(v.id) ?? 0 });
     byProduct.set(v.productId, list);
   }
   return products
     .filter((p) => includeInactive || p.active)
     .map((p) => {
       const vs = (byProduct.get(p.id) ?? []).sort((a, b) => compareSizes(a.size, b.size));
-      return { ...p, variants: vs, totalStock: vs.reduce((s, v) => s + v.stock, 0) };
+      return {
+        ...p,
+        variants: vs,
+        totalStock: vs.reduce((s, v) => s + v.stock, 0),
+        totalInTrip: vs.reduce((s, v) => s + v.inTrip, 0),
+      };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export const isLowStock = (p: ProductWithVariants) => p.minStock > 0 && p.totalStock <= p.minStock;
+/** Poco stock según todo lo que se tiene (bodega + lo que va en el viaje). */
+export const isLowStock = (p: ProductWithVariants) => p.minStock > 0 && p.totalStock + p.totalInTrip <= p.minStock;
 
 // ---------- Inventario ----------
 
@@ -223,13 +275,30 @@ export async function saveCustomer(draft: CustomerDraft) {
   return (await db.customers.add({ ...data, createdAt: Date.now() } as Customer)) as number;
 }
 
-export async function addLedgerEntry(customerId: number, type: 'cargo' | 'abono', amount: number, note: string) {
+export async function addLedgerEntry(
+  customerId: number,
+  type: 'cargo' | 'abono',
+  amount: number,
+  note: string,
+  method: PaymentMethod | null = null,
+) {
   if (!(amount > 0)) throw new UserError('El valor debe ser mayor a cero.');
   if (type === 'abono') {
+    if (!method) throw new UserError('Indica el medio de pago del abono.');
     const bal = await customerBalance(customerId);
     if (amount > bal) throw new UserError(`El abono supera el saldo pendiente.`);
   }
-  await db.ledger.add({ customerId, date: Date.now(), type, amount, saleId: null, note: note.trim() } as never);
+  const trip = await getActiveTrip();
+  await db.ledger.add({
+    customerId,
+    date: Date.now(),
+    type,
+    amount,
+    saleId: null,
+    note: note.trim(),
+    method: type === 'abono' ? method : null,
+    tripId: trip?.id ?? null,
+  } as never);
 }
 
 export async function customerBalance(customerId: number) {
@@ -251,7 +320,8 @@ export interface SaleInput {
   items: SaleItem[];
   discount: number;
   paymentType: PaymentType;
-  paid: number;
+  /** Lo que se recibe en el momento: en contado debe sumar el total; en crédito es el abono inicial. */
+  payments: Payment[];
   notes: string;
 }
 
@@ -263,19 +333,30 @@ export async function createSale(input: SaleInput): Promise<Sale> {
   const total = subtotal - discount;
   if (input.paymentType === 'credito' && !input.customerId)
     throw new UserError('Para vender a crédito selecciona un cliente.');
-  const paid = input.paymentType === 'contado' ? total : Math.min(Math.max(0, input.paid || 0), total);
+  const payments = mergePayments(input.payments);
+  const paid = payments.reduce((s, p) => s + p.amount, 0);
+  if (input.paymentType === 'contado' && paid !== total)
+    throw new UserError(`Los pagos suman ${paid.toLocaleString('es-CO')} y el total es ${total.toLocaleString('es-CO')}.`);
+  if (paid > total) throw new UserError('El abono inicial no puede ser mayor que el total.');
 
-  return db.transaction('rw', [db.sales, db.variants, db.movements, db.ledger, db.customers, db.settings], async () => {
-    // Validar existencias (sumando cantidades de la misma talla).
+  return db.transaction(
+    'rw',
+    [db.sales, db.variants, db.movements, db.ledger, db.customers, db.settings, db.trips, db.tripItems],
+    async () => {
+    // Con un viaje abierto, la venta sale de la mercancía del viaje; si no, de bodega.
+    const trip = await getActiveTrip();
     const need = new Map<number, number>();
     for (const i of items) need.set(i.variantId, (need.get(i.variantId) ?? 0) + i.qty);
     for (const [variantId, qty] of need) {
-      const v = await db.variants.get(variantId);
-      if (!v) throw new UserError('Una de las tallas ya no existe.');
-      if (v.stock < qty) {
-        const it = items.find((i) => i.variantId === variantId)!;
-        throw new UserError(`Sin existencias suficientes de ${it.name} talla ${it.size} (disponible: ${v.stock}).`);
-      }
+      const it = items.find((i) => i.variantId === variantId)!;
+      const available = trip
+        ? ((await db.tripItems.where({ tripId: trip.id, variantId }).first())?.onHand ?? 0)
+        : ((await db.variants.get(variantId))?.stock ?? -1);
+      if (available < 0) throw new UserError('Una de las tallas ya no existe.');
+      if (available < qty)
+        throw new UserError(
+          `Sin existencias suficientes de ${it.name} talla ${it.size} ${trip ? 'en el viaje' : 'en bodega'} (disponible: ${available}).`,
+        );
     }
 
     const settings = await getSettings();
@@ -292,13 +373,17 @@ export async function createSale(input: SaleInput): Promise<Sale> {
       total,
       paymentType: input.paymentType,
       paid,
+      payments,
+      tripId: trip?.id ?? null,
       notes: input.notes.trim(),
       voided: false,
     };
     const id = (await db.sales.add(sale as Sale)) as number;
     await saveSettings({ nextSaleNumber: settings.nextSaleNumber + 1 });
 
-    for (const i of items) await moveStock(i.variantId, -i.qty, 'venta', `Venta #${sale.number}`, id, date);
+    for (const i of items)
+      if (trip) await moveTripStock(trip.id, i.variantId, -i.qty, 'venta', `Venta #${sale.number} (${trip.destination})`, id, date);
+      else await moveStock(i.variantId, -i.qty, 'venta', `Venta #${sale.number}`, id, date);
 
     if (input.paymentType === 'credito' && customer) {
       await db.ledger.add({
@@ -308,28 +393,40 @@ export async function createSale(input: SaleInput): Promise<Sale> {
         amount: total,
         saleId: id,
         note: `Venta a crédito #${sale.number}`,
+        method: null,
+        tripId: trip?.id ?? null,
       } as never);
-      if (paid > 0)
+      for (const p of payments)
         await db.ledger.add({
           customerId: customer.id,
           date,
           type: 'abono',
-          amount: paid,
+          amount: p.amount,
           saleId: id,
           note: `Abono inicial venta #${sale.number}`,
+          method: p.method,
+          tripId: trip?.id ?? null,
         } as never);
     }
     return { ...sale, id };
-  });
+    },
+  );
 }
 
 /** Anula la venta: devuelve las unidades al inventario y reversa la cartera asociada. */
 export async function voidSale(saleId: number) {
-  await db.transaction('rw', [db.sales, db.variants, db.movements, db.ledger], async () => {
+  await db.transaction('rw', [db.sales, db.variants, db.movements, db.ledger, db.trips, db.tripItems], async () => {
     const sale = await db.sales.get(saleId);
     if (!sale || sale.voided) throw new UserError('La venta ya está anulada.');
     const date = Date.now();
+    // Si la venta fue en un viaje que sigue abierto, las prendas vuelven al viaje; si no, a bodega.
+    const trip = sale.tripId ? await db.trips.get(sale.tripId) : undefined;
+    const toTrip = trip?.status === 'abierto';
     for (const i of sale.items) {
+      if (toTrip && (await db.tripItems.where({ tripId: trip!.id, variantId: i.variantId }).first())) {
+        await moveTripStock(trip!.id, i.variantId, i.qty, 'anulacion', `Anulación venta #${sale.number}`, saleId, date);
+        continue;
+      }
       const v = await db.variants.get(i.variantId);
       if (v) await moveStock(i.variantId, i.qty, 'anulacion', `Anulación venta #${sale.number}`, saleId, date);
     }
@@ -347,5 +444,127 @@ export async function voidSale(saleId: number) {
         } as never);
     }
     await db.sales.update(saleId, { voided: true });
+  });
+}
+
+/** Une pagos del mismo medio y descarta los vacíos. */
+export function mergePayments(payments: Payment[]): Payment[] {
+  const map = new Map<PaymentMethod, number>();
+  for (const p of payments) {
+    const amount = Math.round(p.amount || 0);
+    if (amount < 0) throw new UserError('Un pago no puede ser negativo.');
+    if (amount > 0) map.set(p.method, (map.get(p.method) ?? 0) + amount);
+  }
+  return [...map.entries()].map(([method, amount]) => ({ method, amount }));
+}
+
+// ---------- Viajes ----------
+
+export async function getActiveTrip(): Promise<Trip | undefined> {
+  return db.trips.where('status').equals('abierto').first();
+}
+
+export interface TripDraft {
+  id?: number;
+  destination: string;
+  startDate: number;
+  endDate: number | null;
+  notes: string;
+}
+
+export async function saveTrip(d: TripDraft) {
+  const destination = d.destination.trim();
+  if (!destination) throw new UserError('Escribe el destino del viaje.');
+  if (d.endDate && d.endDate < d.startDate) throw new UserError('La fecha de regreso es antes de la salida.');
+  const data = { destination, startDate: d.startDate, endDate: d.endDate, notes: d.notes.trim() };
+  if (d.id) {
+    await db.trips.update(d.id, data);
+    return d.id;
+  }
+  if (await getActiveTrip()) throw new UserError('Ya hay un viaje abierto. Ciérralo antes de crear otro.');
+  return (await db.trips.add({ ...data, status: 'abierto', createdAt: Date.now(), closedAt: null } as Trip)) as number;
+}
+
+async function openTrip(tripId: number) {
+  const trip = await db.trips.get(tripId);
+  if (!trip) throw new UserError('El viaje no existe.');
+  if (trip.status !== 'abierto') throw new UserError('El viaje ya está cerrado.');
+  return trip;
+}
+
+/** Saca mercancía de bodega y la deja "en viaje". */
+export async function loadTripStock(tripId: number, lines: { variantId: number; qty: number }[]) {
+  const valid = lines.filter((l) => l.qty > 0);
+  if (!valid.length) throw new UserError('Agrega al menos una talla con cantidad.');
+  await db.transaction('rw', [db.trips, db.tripItems, db.variants, db.movements, db.products], async () => {
+    const trip = await openTrip(tripId);
+    const date = Date.now();
+    for (const l of valid) {
+      const v = await db.variants.get(l.variantId);
+      if (!v) throw new UserError('Una de las tallas ya no existe.');
+      if (v.stock < l.qty) {
+        const p = await db.products.get(v.productId);
+        throw new UserError(`En bodega solo hay ${v.stock} de ${p?.name ?? ''} talla ${v.size}.`);
+      }
+      await moveStock(l.variantId, -l.qty, 'carga_viaje', `Carga para viaje a ${trip.destination}`, tripId, date);
+      const item = await db.tripItems.where({ tripId, variantId: l.variantId }).first();
+      if (item) await db.tripItems.update(item.id, { loaded: item.loaded + l.qty, onHand: item.onHand + l.qty });
+      else
+        await db.tripItems.add({
+          tripId,
+          productId: v.productId,
+          variantId: l.variantId,
+          loaded: l.qty,
+          onHand: l.qty,
+          returned: 0,
+        } as never);
+    }
+  });
+}
+
+/** Devuelve a bodega unidades que van en el viaje (antes de cerrarlo o al cerrarlo). */
+async function returnFromTrip(trip: Trip, variantId: number, qty: number, date: number) {
+  const item = await db.tripItems.where({ tripId: trip.id, variantId }).first();
+  if (!item || qty <= 0) return;
+  if (qty > item.onHand) throw new UserError('No se pueden devolver más unidades de las que van en el viaje.');
+  await db.tripItems.update(item.id, { onHand: item.onHand - qty, returned: item.returned + qty });
+  await moveStock(variantId, qty, 'regreso_viaje', `Regreso del viaje a ${trip.destination}`, trip.id, date);
+}
+
+export async function returnTripStock(tripId: number, variantId: number, qty: number) {
+  await db.transaction('rw', [db.trips, db.tripItems, db.variants, db.movements], async () => {
+    const trip = await openTrip(tripId);
+    await returnFromTrip(trip, variantId, qty, Date.now());
+  });
+}
+
+/** Cierra el viaje: todo lo que no se vendió vuelve a bodega. */
+export async function closeTrip(tripId: number) {
+  await db.transaction('rw', [db.trips, db.tripItems, db.variants, db.movements], async () => {
+    const trip = await openTrip(tripId);
+    const date = Date.now();
+    const items = await db.tripItems.where('tripId').equals(tripId).toArray();
+    for (const i of items) if (i.onHand > 0) await returnFromTrip(trip, i.variantId, i.onHand, date);
+    const today = new Date(new Date(date).setHours(0, 0, 0, 0)).getTime();
+    await db.trips.update(tripId, {
+      status: 'cerrado',
+      closedAt: date,
+      // Si regresó antes de lo planeado, la fecha de regreso queda en hoy.
+      endDate: trip.endDate && trip.endDate < today ? trip.endDate : today,
+    });
+  });
+}
+
+/** Solo se puede eliminar un viaje abierto sin ventas; la mercancía vuelve a bodega. */
+export async function deleteTrip(tripId: number) {
+  await db.transaction('rw', [db.trips, db.tripItems, db.variants, db.movements, db.sales], async () => {
+    const trip = await openTrip(tripId);
+    if (await db.sales.where('tripId').equals(tripId).count())
+      throw new UserError('El viaje ya tiene ventas: ciérralo en lugar de eliminarlo.');
+    const date = Date.now();
+    for (const i of await db.tripItems.where('tripId').equals(tripId).toArray())
+      if (i.onHand > 0) await returnFromTrip(trip, i.variantId, i.onHand, date);
+    await db.tripItems.where('tripId').equals(tripId).delete();
+    await db.trips.delete(tripId);
   });
 }

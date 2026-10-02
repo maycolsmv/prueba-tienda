@@ -4,7 +4,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { dashboardData, PERIODS, type PeriodKey } from '../lib/stats';
 import { fmtMoney, fmtNum } from '../lib/format';
 import { Icon, type IconName } from '../components/Icon';
-import { ChartCard, ChartEmpty, ColumnChart, fmtPct, SegmentBar, ShareBars, TrendChart, useChartColors } from '../components/charts';
+import { ChartCard, ChartEmpty, ColumnChart, fmtPct, MethodsBar, SegmentBar, ShareBars, TrendChart, useChartColors } from '../components/charts';
 
 const PERIOD_KEY = 'tienda.dashboardPeriod';
 
@@ -160,6 +160,9 @@ export default function Home() {
                   { label: 'Crédito', value: d.payment.credito, color: c.series[1] },
                 ]}
               />
+              <h2 style={{ margin: '8px 0 0' }}>Dinero recibido</h2>
+              <p className="chart-sub" style={{ marginTop: -8 }}>Por medio de pago (ventas y abonos)</p>
+              <MethodsBar methods={d.methods} />
             </ChartCard>
 
             <ChartCard title="Ventas por categoría" subtitle="% de participación en ventas">

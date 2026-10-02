@@ -1,4 +1,4 @@
-import { db, TABLES } from './db';
+import { db, migrateLedgerV2, migrateSaleV2, TABLES, type LedgerEntry, type Sale } from './db';
 import { saveSettings } from './settings';
 import { UserError } from './ops';
 
@@ -51,6 +51,9 @@ export async function readBackup(file: File) {
 
 /** Reemplaza TODA la información actual por la del respaldo. */
 export async function restoreBackup(data: Record<string, unknown[]>) {
+  // Respaldos anteriores a la versión 2 (sin viajes ni medios de pago) se completan igual que en la migración.
+  data.sales = (data.sales ?? []).map((x) => migrateSaleV2(x as Partial<Sale>));
+  data.ledger = (data.ledger ?? []).map((x) => migrateLedgerV2(x as Partial<LedgerEntry>));
   await db.transaction('rw', TABLES.map((t) => db.table(t)), async () => {
     for (const t of TABLES) {
       await db.table(t).clear();

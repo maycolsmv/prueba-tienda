@@ -21,16 +21,20 @@ export function ProductStatus({ p }: { p: ProductWithVariants }) {
  */
 export function StockBar({ p }: { p: ProductWithVariants }) {
   const status = stockStatus(p);
-  const scale = Math.max(p.totalStock, p.minStock * 2, 1);
+  const owned = p.totalStock + p.totalInTrip;
+  const scale = Math.max(owned, p.minStock * 2, 1);
   const color = status === 'agotado' ? 'var(--status-critical)' : status === 'poco' ? 'var(--status-warning)' : 'var(--status-good)';
   return (
-    <div className="stockbar" title={`Stock ${p.totalStock}${p.minStock ? ` · mínimo ${p.minStock}` : ''}`}>
+    <div
+      className="stockbar"
+      title={`Stock ${owned}${p.totalInTrip ? ` (${p.totalInTrip} en viaje)` : ''}${p.minStock ? ` · mínimo ${p.minStock}` : ''}`}
+    >
       <div className="stockbar-track">
-        <span className="stockbar-fill" style={{ width: `${(p.totalStock / scale) * 100}%`, background: color }} />
+        <span className="stockbar-fill" style={{ width: `${(owned / scale) * 100}%`, background: color }} />
         {p.minStock > 0 && <span className="stockbar-min" style={{ left: `calc(${(p.minStock / scale) * 100}% - 1px)` }} />}
       </div>
       <span className="stockbar-text">
-        {p.totalStock}
+        {owned}
         {p.minStock > 0 && <span className="muted"> / {p.minStock}</span>}
       </span>
     </div>

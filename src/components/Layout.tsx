@@ -1,6 +1,8 @@
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { useSettings } from '../lib/settings';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { getActiveTrip } from '../lib/ops';
 import { createBackup } from '../lib/backup';
 import { useAction } from './ui';
 import { Icon, type IconName } from './Icon';
@@ -11,6 +13,7 @@ const NAV: { to: string; label: string; icon: IconName; end?: boolean; section?:
   { to: '/', label: 'Dashboard', icon: 'dashboard', end: true, section: 'General' },
   { to: '/vender', label: 'Vender', icon: 'sell' },
   { to: '/ventas', label: 'Ventas', icon: 'sales' },
+  { to: '/viajes', label: 'Viajes', icon: 'plane' },
   { to: '/productos', label: 'Productos', icon: 'products', section: 'Bodega' },
   { to: '/inventario', label: 'Inventario', icon: 'inventory' },
   { to: '/clientes', label: 'Clientes', icon: 'customers', section: 'Negocio' },
@@ -23,6 +26,8 @@ const TITLES: { match: RegExp; title: string; sub: string }[] = [
   { match: /^\/$/, title: 'Dashboard', sub: 'Resumen de ventas, inventario y cartera' },
   { match: /^\/vender/, title: 'Nueva venta', sub: 'Busca el producto, elige la talla y registra la venta' },
   { match: /^\/ventas/, title: 'Ventas', sub: 'Historial de ventas y comprobantes' },
+  { match: /^\/viajes\/\d+/, title: 'Detalle del viaje', sub: 'Mercancía, ventas y resultado del viaje' },
+  { match: /^\/viajes/, title: 'Viajes', sub: 'Mercancía que llevas, ventas y utilidad por destino' },
   { match: /^\/productos/, title: 'Productos', sub: 'Catálogo, tallas, precios y stock mínimo' },
   { match: /^\/inventario/, title: 'Inventario y bodega', sub: 'Existencias, entradas, conteos y movimientos' },
   { match: /^\/clientes\/\d+/, title: 'Detalle del cliente', sub: 'Compras, deudas y abonos' },
@@ -32,7 +37,7 @@ const TITLES: { match: RegExp; title: string; sub: string }[] = [
 ];
 
 // En la barra inferior del celular solo caben 5; el resto va en "Más".
-const MOBILE_MAIN = ['/', '/vender', '/productos', '/clientes'];
+const MOBILE_MAIN = ['/', '/vender', '/viajes', '/clientes'];
 
 const COLLAPSE_KEY = 'tienda.sidebarCollapsed';
 
@@ -92,6 +97,7 @@ export default function Layout() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const meta = TITLES.find((t) => t.match.test(pathname)) ?? TITLES[0];
+  const trip = useLiveQuery(getActiveTrip, []);
 
   useEffect(() => {
     document.title = `${meta.title} · ${s?.storeName ?? 'Tienda'}`;
@@ -143,6 +149,12 @@ export default function Layout() {
             <h1>{meta.title}</h1>
             <p className="topbar-sub">{meta.sub}</p>
           </div>
+          {trip && (
+            <Link to={`/viajes/${trip.id}`} className="trip-chip" title="Viaje abierto: las ventas salen de la mercancía del viaje">
+              <Icon name="plane" size={16} />
+              <span>{trip.destination}</span>
+            </Link>
+          )}
           {pathname !== '/vender' && (
             <Link to="/vender" className="btn btn-primary" aria-label="Nueva venta">
               <Icon name="plus" size={18} />

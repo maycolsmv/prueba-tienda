@@ -1,4 +1,4 @@
-import { db, type Sale } from './db';
+import { db, methodLabel, type Sale } from './db';
 import { exportXlsx, type Sheet } from './excel';
 import { allBalances, loadCatalog } from './ops';
 import { fmtDate, fmtDateTime, toDateInput } from './format';
@@ -12,10 +12,12 @@ const MOVEMENT_LABEL: Record<string, string> = {
   conteo: 'Conteo físico',
   anulacion: 'Anulación',
   inicial: 'Existencia inicial',
+  carga_viaje: 'Carga a viaje',
+  regreso_viaje: 'Regreso de viaje',
 };
 export const movementLabel = (t: string) => MOVEMENT_LABEL[t] ?? t;
 
-function salesSheets(sales: Sale[]): Sheet[] {
+function salesSheets(sales: Sale[], tripNames: Map<number, string>): Sheet[] {
   return [
     {
       name: 'Ventas',
@@ -29,6 +31,11 @@ function salesSheets(sales: Sale[]): Sheet[] {
         Descuento: s.discount,
         Total: s.total,
         Pagado: s.paid,
+        Efectivo: s.payments.filter((p) => p.method === 'efectivo').reduce((a, p) => a + p.amount, 0),
+        Nequi: s.payments.filter((p) => p.method === 'nequi').reduce((a, p) => a + p.amount, 0),
+        Transferencia: s.payments.filter((p) => p.method === 'transferencia').reduce((a, p) => a + p.amount, 0),
+        OtroMedio: s.payments.filter((p) => p.method === 'otro').reduce((a, p) => a + p.amount, 0),
+        Viaje: s.tripId ? (tripNames.get(s.tripId) ?? '') : '',
         Estado: s.voided ? 'Anulada' : 'Activa',
         Nota: s.notes,
       })),
@@ -52,8 +59,12 @@ function salesSheets(sales: Sale[]): Sheet[] {
   ];
 }
 
-export function exportSales(sales: Sale[], from: string, to: string) {
-  exportXlsx(`ventas-${from}-a-${to}.xlsx`, salesSheets(sales));
+async function tripNameMap() {
+  return new Map((await db.trips.toArray()).map((t) => [t.id, t.destination]));
+}
+
+export async function exportSales(sales: Sale[], from: string, to: string) {
+  exportXlsx(`ventas-${from}-a-${to}.xlsx`, salesSheets(sales, await tripNameMap()));
 }
 
 async function inventorySheets(): Promise<Sheet[]> {
@@ -108,6 +119,7 @@ async function customerSheets(): Promise<Sheet[]> {
           Cliente: names.get(e.customerId) ?? '',
           Tipo: e.type === 'cargo' ? 'Deuda' : 'Abono',
           Valor: e.amount,
+          Medio: e.type === 'abono' ? methodLabel(e.method) : '',
           Detalle: e.note,
         })),
     },
@@ -148,7 +160,7 @@ export async function exportEverything() {
   const sales = await db.sales.orderBy('date').toArray();
   exportXlsx(`tienda-completo-${stamp()}.xlsx`, [
     ...(await inventorySheets()),
-    ...salesSheets(sales),
+    ...salesSheets(sales, await tripNameMap()),
     ...(await customerSheets()),
     ...(await movementSheets()),
   ]);

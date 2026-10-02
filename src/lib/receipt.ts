@@ -1,6 +1,6 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import type { Sale } from './db';
+import { methodLabel, type Sale } from './db';
 import type { StoreSettings } from './settings';
 import { fmtDateTime, fmtMoney } from './format';
 
@@ -8,7 +8,7 @@ const W = 80; // ancho de tiquete en mm
 const M = 5;
 
 export function buildReceiptPdf(sale: Sale, s: StoreSettings, balance: number | null): jsPDF {
-  const estimated = 95 + sale.items.length * 9 + (sale.notes ? 10 : 0) + (balance !== null ? 8 : 0);
+  const estimated = 100 + sale.payments.length * 5 + sale.items.length * 9 + (sale.notes ? 10 : 0) + (balance !== null ? 8 : 0);
   const doc = new jsPDF({ unit: 'mm', format: [W, Math.max(140, estimated)] });
   const cx = W / 2;
   let y = 9;
@@ -70,8 +70,9 @@ export function buildReceiptPdf(sale: Sale, s: StoreSettings, balance: number | 
     row('Descuento', `- ${fmtMoney(sale.discount)}`);
   }
   row('TOTAL', fmtMoney(sale.total), true);
+  if (sale.paymentType === 'contado') for (const p of sale.payments) row(methodLabel(p.method), fmtMoney(p.amount));
   if (sale.paymentType === 'credito') {
-    row('Abonado', fmtMoney(sale.paid));
+    row(`Abonado${sale.payments.length ? ` (${sale.payments.map((p) => methodLabel(p.method)).join(', ')})` : ''}`, fmtMoney(sale.paid));
     row('Pendiente de esta venta', fmtMoney(sale.total - sale.paid));
     if (balance !== null) row('Saldo total del cliente', fmtMoney(balance));
   }

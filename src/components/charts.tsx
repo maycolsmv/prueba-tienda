@@ -237,6 +237,21 @@ export function ShareBars({
   );
 }
 
+/** Dinero recibido por medio de pago (efectivo, Nequi, transferencia, otro). */
+export function MethodsBar({ methods }: { methods: Record<'efectivo' | 'nequi' | 'transferencia' | 'otro', number> }) {
+  const c = useChartColors();
+  return (
+    <SegmentBar
+      parts={[
+        { label: 'Efectivo', value: methods.efectivo, color: c.series[0] },
+        { label: 'Nequi', value: methods.nequi, color: c.series[1] },
+        { label: 'Transferencia', value: methods.transferencia, color: c.series[2] },
+        { label: 'Otro', value: methods.otro, color: c.series[3] },
+      ]}
+    />
+  );
+}
+
 /** Barra segmentada (partes de un total) con leyenda y %; hover muestra el valor. */
 export function SegmentBar({
   parts,
