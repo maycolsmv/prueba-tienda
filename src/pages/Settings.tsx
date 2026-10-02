@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react';
 import { createBackup, readBackup, restoreBackup } from '../lib/backup';
 import { exportCustomers, exportEverything, exportInventory, exportMovements } from '../lib/exports';
 import { fmtDateTime } from '../lib/format';
+import { loadDemoData, realDataCounts, removeDemoData } from '../lib/demo';
+import { Icon } from '../components/Icon';
 import { saveSettings, useSettings, type StoreSettings } from '../lib/settings';
-import { Field, NumberInput, PageHeader, pickFile, useAction, useConfirm } from '../components/ui';
+import { Field, NumberInput, pickFile, useAction, useConfirm, useToast } from '../components/ui';
 
 export default function Settings() {
   const s = useSettings();
@@ -11,6 +13,7 @@ export default function Settings() {
   const [persisted, setPersisted] = useState<boolean | null>(null);
   const { run, busy } = useAction();
   const confirm = useConfirm();
+  const toastDemo = useToast();
 
   useEffect(() => {
     if (s && !d) setD(s);
@@ -57,11 +60,54 @@ export default function Settings() {
     if (ok) setTimeout(() => location.reload(), 800);
   };
 
+  const loadDemo = async () => {
+    const real = await realDataCounts();
+    const hasReal = real.products + real.customers + real.sales > 0;
+    const msg = hasReal
+      ? `⚠ Ya tienes datos REALES en este dispositivo (${real.products} productos, ${real.customers} clientes, ${real.sales} ventas).\n\n` +
+        'Los datos de demostración se van a MEZCLAR con ellos en el dashboard, reportes e inventario. ' +
+        'Luego puedes borrar solo los de demostración, pero te recomendamos hacer un respaldo antes.\n\n¿Cargar de todas formas?'
+      : 'Se van a crear unos 20 productos de ropa, 15 clientes y cerca de 3 meses de ventas (contado y crédito) para que veas el dashboard lleno.\n\nLuego los puedes borrar con un clic.';
+    if (!(await confirm(msg, { confirmLabel: hasReal ? 'Sí, mezclar con mis datos' : 'Cargar demostración', danger: hasReal }))) return;
+    const r = await run(loadDemoData);
+    if (r) toastDemo(`Demostración cargada: ${r.products} productos, ${r.customers} clientes y ${r.sales} ventas`);
+  };
+
+  const clearDemo = async () => {
+    const ok = await confirm(
+      'Se borrarán SOLO los productos, clientes, ventas, abonos y movimientos de demostración. Tus datos reales no se tocan.\n\n¿Borrar la demostración?',
+      { confirmLabel: 'Borrar demostración', danger: true },
+    );
+    if (ok) await run(removeDemoData, 'Datos de demostración borrados');
+  };
+
   const days = s.lastBackupAt ? Math.floor((Date.now() - s.lastBackupAt) / 86_400_000) : null;
 
   return (
     <div className="page">
-      <PageHeader title="Ajustes" />
+      <section className="card">
+        <div className="row-between wrap gap">
+          <div>
+            <h2 className="row gap">
+              <Icon name="database" size={18} /> Datos de demostración
+            </h2>
+            <p className="muted small" style={{ marginBottom: 0 }}>
+              {s.demoLoadedAt
+                ? `Cargados el ${fmtDateTime(s.demoLoadedAt)}. Bórralos antes de empezar a usar la app con datos reales.`
+                : 'Llena la app con productos, clientes y 3 meses de ventas de ejemplo para ver el dashboard y los reportes.'}
+            </p>
+          </div>
+          {s.demoLoadedAt ? (
+            <button className="btn btn-danger-ghost" disabled={busy} onClick={clearDemo}>
+              <Icon name="trash" size={18} /> Borrar demostración
+            </button>
+          ) : (
+            <button className="btn btn-primary" disabled={busy} onClick={loadDemo}>
+              Cargar datos de demostración
+            </button>
+          )}
+        </div>
+      </section>
 
       <section className="card">
         <h2>Respaldo de información</h2>

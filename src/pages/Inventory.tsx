@@ -6,14 +6,17 @@ import {
   adjustStock,
   applyCount,
   createCount,
-  isLowStock,
   loadCatalog,
   registerEntry,
   type ProductWithVariants,
 } from '../lib/ops';
-import { fmtDateTime, fmtMoney, normalize } from '../lib/format';
+import { fmtDateTime, fmtMoney, fmtNum, normalize } from '../lib/format';
+import { inventorySummary, stockStatus, type StockStatus } from '../lib/stats';
+import { Icon } from '../components/Icon';
+import { fmtPct } from '../components/charts';
+import { ProductStatus, StockBar } from '../components/status';
 import { exportInventory, exportMovements, movementLabel } from '../lib/exports';
-import { Empty, Field, Modal, NumberInput, PageHeader, SearchBox, Tabs, useAction, useConfirm } from '../components/ui';
+import { Empty, Field, Modal, NumberInput, SearchBox, Tabs, useAction, useConfirm } from '../components/ui';
 
 type Tab = 'stock' | 'entrada' | 'conteo' | 'movimientos';
 
@@ -22,7 +25,6 @@ export default function Inventory() {
   const tab = (params.get('tab') as Tab) || 'stock';
   return (
     <div className="page">
-      <PageHeader title="Inventario y bodega" />
       <Tabs
         value={tab}
         onChange={(t) => setParams({ tab: t }, { replace: true })}
@@ -46,74 +48,143 @@ export default function Inventory() {
 function StockTab({ onlyLow }: { onlyLow: boolean }) {
   const catalog = useLiveQuery(() => loadCatalog(), []);
   const [q, setQ] = useState('');
-  const [low, setLow] = useState(onlyLow);
+  const [cat, setCat] = useState('');
+  const [status, setStatus] = useState<'' | StockStatus | 'reponer'>(onlyLow ? 'reponer' : '');
   const [adjust, setAdjust] = useState<{ p: ProductWithVariants; v: Variant } | null>(null);
+
+  const categories = useMemo(() => [...new Set((catalog ?? []).map((p) => p.category).filter(Boolean))].sort(), [catalog]);
+  const summary = useMemo(() => inventorySummary(catalog ?? []), [catalog]);
 
   const list = useMemo(() => {
     const n = normalize(q);
-    return (catalog ?? []).filter(
-      (p) => (!low || isLowStock(p)) && (!n || normalize(`${p.name} ${p.reference} ${p.category}`).includes(n)),
-    );
-  }, [catalog, q, low]);
+    return (catalog ?? []).filter((p) => {
+      const st = stockStatus(p);
+      if (status === 'reponer' ? st === 'disponible' : status && st !== status) return false;
+      if (cat && p.category !== cat) return false;
+      return !n || normalize(`${p.name} ${p.reference} ${p.category}`).includes(n);
+    });
+  }, [catalog, q, cat, status]);
 
-  const units = list.reduce((a, p) => a + p.totalStock, 0);
-  const value = list.reduce((a, p) => a + p.totalStock * p.price, 0);
-  const cost = list.reduce((a, p) => a + p.totalStock * p.cost, 0);
+  const pct = (n: number) => (summary.products ? fmtPct((n / summary.products) * 100) : '0%');
+
+  if (!catalog) return null;
 
   return (
     <>
-      <div className="card filters">
-        <SearchBox value={q} onChange={setQ} placeholder="Buscar producto" />
-        <div className="row-between wrap gap">
-          <label className="check small">
-            <input type="checkbox" checked={low} onChange={(e) => setLow(e.target.checked)} /> Solo poco stock
-          </label>
-          <button className="btn btn-sm btn-ghost" onClick={exportInventory}>
-            Exportar a Excel
-          </button>
+      <div className="kpis">
+        <div className="kpi">
+          <div className="kpi-top">
+            <span className="kpi-label">Total unidades</span>
+            <span className="kpi-icon">
+              <Icon name="box" size={18} />
+            </span>
+          </div>
+          <div className="kpi-value">{fmtNum(summary.units)}</div>
+          <div className="kpi-foot">
+            Costo {fmtMoney(summary.cost)} · Venta {fmtMoney(summary.value)}
+          </div>
         </div>
+        {(
+          [
+            ['disponible', 'Disponible', 'ok', 'inventory'],
+            ['poco', 'Poco stock', 'warn', 'alert'],
+            ['agotado', 'Agotado', 'danger', 'alert'],
+          ] as const
+        ).map(([key, label, tone, icon]) => (
+          <button
+            key={key}
+            className={`kpi kpi-filter ${status === key ? 'selected' : ''}`}
+            onClick={() => setStatus(status === key ? '' : key)}
+            aria-pressed={status === key}
+          >
+            <div className="kpi-top">
+              <span className="kpi-label">{label}</span>
+              <span className={`kpi-icon ${tone}`}>
+                <Icon name={icon} size={18} />
+              </span>
+            </div>
+            <div className="kpi-value">{summary.counts[key]}</div>
+            <div className="kpi-foot">
+              <span className={`badge no-dot badge-${tone === 'ok' ? 'ok' : tone}`}>{pct(summary.counts[key])}</span>
+              <span>de {summary.products} productos</span>
+            </div>
+          </button>
+        ))}
       </div>
-      <div className="summary-bar">
-        <span>
-          {units} unidades · costo {fmtMoney(cost)}
-        </span>
-        <strong>Valor venta {fmtMoney(value)}</strong>
+
+      <div className="card filter-row">
+        <SearchBox value={q} onChange={setQ} placeholder="Buscar producto o referencia" />
+        <select value={cat} onChange={(e) => setCat(e.target.value)} aria-label="Categoría">
+          <option value="">Todas las categorías</option>
+          {categories.map((c) => (
+            <option key={c}>{c}</option>
+          ))}
+        </select>
+        <select value={status} onChange={(e) => setStatus(e.target.value as typeof status)} aria-label="Estado">
+          <option value="">Todos los estados</option>
+          <option value="disponible">Disponible</option>
+          <option value="poco">Poco stock</option>
+          <option value="agotado">Agotado</option>
+          <option value="reponer">Por reponer (poco + agotado)</option>
+        </select>
+        <button className="btn btn-ghost" onClick={exportInventory}>
+          Exportar Excel
+        </button>
       </div>
+
       {catalog && list.length === 0 ? (
-        <Empty>{low ? 'Ningún producto con poco stock.' : 'No hay productos.'}</Empty>
+        <Empty>{catalog.length ? 'Ningún producto coincide con los filtros.' : 'No hay productos.'}</Empty>
       ) : (
-        <div className="card flush">
-          <ul className="list">
-            {list.map((p) => (
-              <li key={p.id} className="list-row">
-                <div className="grow">
-                  <div className="row-between">
+        <div className="card flush table-wrap">
+          <table className="table stack-table">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th>Tallas (toca para ajustar)</th>
+                <th>Stock vs. mínimo</th>
+                <th className="num">Valor al costo</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((p) => (
+                <tr key={p.id}>
+                  <td data-label="Producto">
                     <strong>{p.name}</strong>
-                    {isLowStock(p) && <span className="badge badge-warn">Mín {p.minStock}</span>}
-                  </div>
-                  <div className="muted small">
-                    Ref {p.reference}
-                    {p.category && ` · ${p.category}`} · Total {p.totalStock}
-                  </div>
-                  <div className="size-line">
-                    {p.variants.map((v) => (
-                      <button
-                        key={v.id}
-                        className={`size-tag clickable ${v.stock <= 0 ? 'zero' : ''}`}
-                        title="Ajustar existencia"
-                        onClick={() => setAdjust({ p, v })}
-                      >
-                        {v.size} <b>{v.stock}</b>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ul>
+                    <div className="muted small">
+                      Ref {p.reference}
+                      {p.category && ` · ${p.category}`}
+                    </div>
+                  </td>
+                  <td data-label="Tallas">
+                    <div className="size-line" style={{ marginTop: 0 }}>
+                      {p.variants.map((v) => (
+                        <button
+                          key={v.id}
+                          className={`size-tag clickable ${v.stock <= 0 ? 'zero' : ''}`}
+                          title="Ajustar existencia"
+                          onClick={() => setAdjust({ p, v })}
+                        >
+                          {v.size} <b>{v.stock}</b>
+                        </button>
+                      ))}
+                    </div>
+                  </td>
+                  <td data-label="Stock / mín">
+                    <StockBar p={p} />
+                  </td>
+                  <td data-label="Valor" className="num">
+                    {fmtMoney(p.totalStock * p.cost)}
+                  </td>
+                  <td data-label="Estado">
+                    <ProductStatus p={p} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
-      <p className="muted small center">Toca una talla para ajustar su existencia.</p>
       {adjust && <AdjustModal {...adjust} onClose={() => setAdjust(null)} />}
     </>
   );

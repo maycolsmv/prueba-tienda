@@ -252,10 +252,12 @@ export function Tabs<T extends string>({
   );
 }
 
-export function PageHeader({ title, actions }: { title: string; actions?: ReactNode }) {
+/** Acciones de la página. El título y subtítulo se muestran en la barra superior (Layout). */
+export function PageHeader({ actions, children }: { title?: string; actions?: ReactNode; children?: ReactNode }) {
+  if (!actions && !children) return null;
   return (
     <div className="page-head">
-      <h1>{title}</h1>
+      {children}
       {actions && <div className="page-actions">{actions}</div>}
     </div>
   );

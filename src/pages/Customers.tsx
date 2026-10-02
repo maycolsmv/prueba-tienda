@@ -7,6 +7,7 @@ import { fmtMoney, normalize } from '../lib/format';
 import { exportCustomers } from '../lib/exports';
 import { Empty, PageHeader, SearchBox, Tabs } from '../components/ui';
 import CustomerForm from '../components/CustomerForm';
+import { Icon } from '../components/Icon';
 
 export default function Customers() {
   const [params, setParams] = useSearchParams();
@@ -27,12 +28,14 @@ export default function Customers() {
       .sort((a, b) => (filter === 'deben' ? b.balance - a.balance : 0));
   }, [data, q, filter]);
 
-  const cartera = list.reduce((a, c) => a + Math.max(0, c.balance), 0);
+  const summary = useMemo(() => {
+    const bal = [...(data?.balances.values() ?? [])].filter((b) => b > 0);
+    return { total: data?.customers.length ?? 0, debtors: bal.length, cartera: bal.reduce((a, b) => a + b, 0) };
+  }, [data]);
 
   return (
     <div className="page">
       <PageHeader
-        title="Clientes y cartera"
         actions={
           <>
             <button className="btn btn-ghost" onClick={exportCustomers}>
@@ -44,6 +47,41 @@ export default function Customers() {
           </>
         }
       />
+      {data && (
+        <div className="kpis kpis-3">
+          <div className="kpi">
+            <div className="kpi-top">
+              <span className="kpi-label">Total clientes</span>
+              <span className="kpi-icon">
+                <Icon name="customers" size={18} />
+              </span>
+            </div>
+            <div className="kpi-value">{summary.total}</div>
+          </div>
+          <div className="kpi">
+            <div className="kpi-top">
+              <span className="kpi-label">Con deuda</span>
+              <span className="kpi-icon warn">
+                <Icon name="alert" size={18} />
+              </span>
+            </div>
+            <div className="kpi-value">{summary.debtors}</div>
+            <div className="kpi-foot">
+              <span className="badge no-dot badge-warn">{summary.total ? Math.round((summary.debtors / summary.total) * 100) : 0}%</span>
+              <span>de los clientes</span>
+            </div>
+          </div>
+          <div className="kpi">
+            <div className="kpi-top">
+              <span className="kpi-label">Cartera total</span>
+              <span className="kpi-icon danger">
+                <Icon name="wallet" size={18} />
+              </span>
+            </div>
+            <div className="kpi-value">{fmtMoney(summary.cartera)}</div>
+          </div>
+        </div>
+      )}
       <Tabs
         value={filter}
         onChange={(f) => setParams(f === 'deben' ? { filtro: 'deben' } : {}, { replace: true })}
@@ -55,12 +93,6 @@ export default function Customers() {
       <div className="card filters">
         <SearchBox value={q} onChange={setQ} placeholder="Buscar por nombre, celular o documento" />
       </div>
-      {filter === 'deben' && (
-        <div className="summary-bar">
-          <span>{list.length} clientes deben</span>
-          <strong>{fmtMoney(cartera)}</strong>
-        </div>
-      )}
       {data && list.length === 0 ? (
         <Empty>{filter === 'deben' ? 'Ningún cliente tiene saldo pendiente.' : 'No hay clientes registrados.'}</Empty>
       ) : (
@@ -69,17 +101,20 @@ export default function Customers() {
             {list.map((c) => (
               <li key={c.id}>
                 <Link to={`/clientes/${c.id}`} className="list-row pick-row">
-                  <div>
-                    <strong>{c.name}</strong>
-                    <div className="muted small">{[c.phone, c.document].filter(Boolean).join(' · ') || 'Sin datos de contacto'}</div>
+                  <div className="row-main">
+                    <span className="avatar">{c.name.slice(0, 1).toUpperCase()}</span>
+                    <div>
+                      <strong>{c.name}</strong>
+                      <div className="muted small">{[c.phone, c.document].filter(Boolean).join(' · ') || 'Sin datos de contacto'}</div>
+                    </div>
                   </div>
                   <div className="right">
                     {c.balance > 0 ? (
                       <span className="badge badge-warn">Debe {fmtMoney(c.balance)}</span>
                     ) : c.balance < 0 ? (
-                      <span className="badge badge-ok">A favor {fmtMoney(-c.balance)}</span>
+                      <span className="badge badge-info">A favor {fmtMoney(-c.balance)}</span>
                     ) : (
-                      <span className="muted small">Al día</span>
+                      <span className="badge badge-ok">Al día</span>
                     )}
                   </div>
                 </Link>

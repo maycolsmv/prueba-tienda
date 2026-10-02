@@ -1,42 +1,48 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { useState } from 'react';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import { useSettings } from '../lib/settings';
 import { createBackup } from '../lib/backup';
 import { useAction } from './ui';
+import { Icon, type IconName } from './Icon';
 
-const icons: Record<string, string> = {
-  home: 'M3 11l9-7 9 7v9a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1z',
-  sell: 'M4 5h2l2.4 10.2a1 1 0 001 .8h8.2a1 1 0 001-.8L20 8H7 M10 20a1 1 0 100-2 1 1 0 000 2z M17 20a1 1 0 100-2 1 1 0 000 2z',
-  sales: 'M6 3h12v18l-3-2-3 2-3-2-3 2z M9 8h6 M9 12h6',
-  products: 'M8 4l-5 3 2 5 2-1v9h10v-9l2 1 2-5-5-3c-.5 2-2 3-4 3s-3.5-1-4-3z',
-  inventory: 'M3 7l9-4 9 4v10l-9 4-9-4z M3 7l9 4 9-4 M12 11v10',
-  customers: 'M9 11a4 4 0 100-8 4 4 0 000 8z M2 21v-1a6 6 0 0112 0v1 M16 3.5a4 4 0 010 7 M18 14a6 6 0 014 6v1',
-  reports: 'M4 20V10 M10 20V4 M16 20v-8 M22 20H2',
-  settings:
-    'M12 15a3 3 0 100-6 3 3 0 000 6z M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-2.9 1.2V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-2.9-1.2l-.1.1a2 2 0 11-2.8-2.8l.1-.1A1.7 1.7 0 003 15H3a2 2 0 110-4h.1a1.7 1.7 0 001.2-2.9l-.1-.1a2 2 0 112.8-2.8l.1.1A1.7 1.7 0 009 4.6V3a2 2 0 114 0v.1a1.7 1.7 0 002.9 1.2l.1-.1a2 2 0 112.8 2.8l-.1.1A1.7 1.7 0 0021 9h.1a2 2 0 110 4H21a1.7 1.7 0 00-1.6 2z',
-};
+export { Icon };
 
-export function Icon({ name, size = 22 }: { name: keyof typeof icons; size?: number }) {
-  return (
-    <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      <path d={icons[name]} />
-    </svg>
-  );
-}
-
-const NAV = [
-  { to: '/', label: 'Inicio', icon: 'home', end: true },
+const NAV: { to: string; label: string; icon: IconName; end?: boolean; section?: string }[] = [
+  { to: '/', label: 'Dashboard', icon: 'dashboard', end: true, section: 'General' },
   { to: '/vender', label: 'Vender', icon: 'sell' },
   { to: '/ventas', label: 'Ventas', icon: 'sales' },
-  { to: '/productos', label: 'Productos', icon: 'products' },
+  { to: '/productos', label: 'Productos', icon: 'products', section: 'Bodega' },
   { to: '/inventario', label: 'Inventario', icon: 'inventory' },
-  { to: '/clientes', label: 'Clientes', icon: 'customers' },
+  { to: '/clientes', label: 'Clientes', icon: 'customers', section: 'Negocio' },
   { to: '/reportes', label: 'Reportes', icon: 'reports' },
   { to: '/ajustes', label: 'Ajustes', icon: 'settings' },
-] as const;
+];
+
+/** Título y subtítulo de la barra superior según la ruta. */
+const TITLES: { match: RegExp; title: string; sub: string }[] = [
+  { match: /^\/$/, title: 'Dashboard', sub: 'Resumen de ventas, inventario y cartera' },
+  { match: /^\/vender/, title: 'Nueva venta', sub: 'Busca el producto, elige la talla y registra la venta' },
+  { match: /^\/ventas/, title: 'Ventas', sub: 'Historial de ventas y comprobantes' },
+  { match: /^\/productos/, title: 'Productos', sub: 'Catálogo, tallas, precios y stock mínimo' },
+  { match: /^\/inventario/, title: 'Inventario y bodega', sub: 'Existencias, entradas, conteos y movimientos' },
+  { match: /^\/clientes\/\d+/, title: 'Detalle del cliente', sub: 'Compras, deudas y abonos' },
+  { match: /^\/clientes/, title: 'Clientes y cartera', sub: 'Clientes registrados y saldos pendientes' },
+  { match: /^\/reportes/, title: 'Reportes', sub: 'Análisis por periodo, exportable a Excel' },
+  { match: /^\/ajustes/, title: 'Ajustes', sub: 'Datos del negocio, respaldo y exportaciones' },
+];
 
 // En la barra inferior del celular solo caben 5; el resto va en "Más".
 const MOBILE_MAIN = ['/', '/vender', '/productos', '/clientes'];
+
+const COLLAPSE_KEY = 'tienda.sidebarCollapsed';
+
+function readCollapsed() {
+  try {
+    return localStorage.getItem(COLLAPSE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
 
 function BackupBanner() {
   const s = useSettings();
@@ -63,32 +69,99 @@ function BackupBanner() {
   );
 }
 
+function DemoBanner() {
+  const s = useSettings();
+  if (!s?.demoLoadedAt) return null;
+  return (
+    <div className="banner info">
+      <span>
+        Estás viendo <strong>datos de demostración</strong>. Bórralos desde Ajustes antes de empezar a usar la app con datos
+        reales.
+      </span>
+      <Link to="/ajustes" className="btn btn-sm btn-ghost">
+        Ir a Ajustes
+      </Link>
+    </div>
+  );
+}
+
 export default function Layout() {
   const s = useSettings();
   const [more, setMore] = useState(false);
+  const [collapsed, setCollapsed] = useState(readCollapsed);
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const meta = TITLES.find((t) => t.match.test(pathname)) ?? TITLES[0];
+
+  useEffect(() => {
+    document.title = `${meta.title} · ${s?.storeName ?? 'Tienda'}`;
+  }, [meta.title, s?.storeName]);
+
+  const toggle = () => {
+    setCollapsed((c) => {
+      try {
+        localStorage.setItem(COLLAPSE_KEY, c ? '0' : '1');
+      } catch {
+        /* sin almacenamiento: solo dura esta sesión */
+      }
+      return !c;
+    });
+  };
+
   return (
-    <div className="app">
+    <div className={`app ${collapsed ? 'collapsed' : ''}`}>
       <aside className="sidebar">
-        <div className="brand">{s?.storeName ?? ''}</div>
+        <div className="brand" title={s?.storeName}>
+          <div className="brand-logo">
+            <Icon name="products" size={20} />
+          </div>
+          <div className="brand-text">
+            <div className="brand-name">{s?.storeName ?? ''}</div>
+            <div className="brand-sub">Sistema de gestión</div>
+          </div>
+        </div>
         <nav>
           {NAV.map((n) => (
-            <NavLink key={n.to} to={n.to} end={'end' in n} className="nav-link">
-              <Icon name={n.icon} />
-              <span>{n.label}</span>
-            </NavLink>
+            <div key={n.to}>
+              {n.section && <div className="nav-section">{n.section}</div>}
+              <NavLink to={n.to} end={n.end} className="nav-link" title={collapsed ? n.label : undefined}>
+                <Icon name={n.icon} />
+                <span>{n.label}</span>
+              </NavLink>
+            </div>
           ))}
         </nav>
+        <button className="collapse-btn" onClick={toggle} aria-expanded={!collapsed}>
+          <Icon name={collapsed ? 'chevronRight' : 'chevronLeft'} />
+          <span>Ocultar menú</span>
+        </button>
       </aside>
-      <main className="main">
-        <BackupBanner />
-        <Outlet />
-      </main>
+
+      <div className="main-wrap">
+        <header className="topbar">
+          <div className="topbar-title">
+            <h1>{meta.title}</h1>
+            <p className="topbar-sub">{meta.sub}</p>
+          </div>
+          {pathname !== '/vender' && (
+            <Link to="/vender" className="btn btn-primary" aria-label="Nueva venta">
+              <Icon name="plus" size={18} />
+              <span className="btn-label">Nueva venta</span>
+            </Link>
+          )}
+        </header>
+        <main className="main">
+          <DemoBanner />
+          <BackupBanner />
+          <Outlet />
+        </main>
+      </div>
+
       <nav className="bottom-nav">
         {NAV.filter((n) => MOBILE_MAIN.includes(n.to)).map((n) => (
-          <NavLink key={n.to} to={n.to} end={'end' in n} className="bnav-link" onClick={() => setMore(false)}>
-            <Icon name={n.icon} />
-            <span>{n.label}</span>
+          <NavLink key={n.to} to={n.to} end={n.end} className="bnav-link" onClick={() => setMore(false)}>
+            <Icon name={n.icon} size={22} />
+            <span>{n.to === '/' ? 'Inicio' : n.label}</span>
           </NavLink>
         ))}
         <button className={`bnav-link ${more ? 'active' : ''}`} onClick={() => setMore((m) => !m)}>

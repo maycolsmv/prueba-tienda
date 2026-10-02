@@ -34,11 +34,11 @@ export default function Sales() {
 
   const valid = list.filter((s) => !s.voided);
   const total = valid.reduce((a, s) => a + s.total, 0);
+  const contado = valid.filter((s) => s.paymentType === 'contado').reduce((a, s) => a + s.total, 0);
 
   return (
     <div className="page">
       <PageHeader
-        title="Historial de ventas"
         actions={
           <button className="btn btn-ghost" onClick={() => exportSales(list, from, to)} disabled={!list.length}>
             Exportar a Excel
@@ -64,27 +64,69 @@ export default function Sales() {
         <SearchBox value={q} onChange={setQ} placeholder="Buscar por número, cliente o producto" />
       </div>
 
-      <div className="summary-bar">
-        <span>{valid.length} ventas</span>
-        <strong>{fmtMoney(total)}</strong>
+      <div className="kpis">
+        <div className="kpi">
+          <span className="kpi-label">Total vendido</span>
+          <div className="kpi-value">{fmtMoney(total)}</div>
+          <div className="kpi-foot">{valid.length} ventas</div>
+        </div>
+        <div className="kpi">
+          <span className="kpi-label">Ticket promedio</span>
+          <div className="kpi-value">{fmtMoney(valid.length ? total / valid.length : 0)}</div>
+          <div className="kpi-foot">{valid.reduce((a, s) => a + s.items.reduce((b, i) => b + i.qty, 0), 0)} unidades</div>
+        </div>
+        <div className="kpi">
+          <span className="kpi-label">Contado</span>
+          <div className="kpi-value">{fmtMoney(contado)}</div>
+          <div className="kpi-foot">
+            <span className="badge no-dot badge-ok">{total ? Math.round((contado / total) * 100) : 0}%</span>
+          </div>
+        </div>
+        <div className="kpi">
+          <span className="kpi-label">Crédito</span>
+          <div className="kpi-value">{fmtMoney(total - contado)}</div>
+          <div className="kpi-foot">
+            <span className="badge no-dot badge-warn">{total ? Math.round(((total - contado) / total) * 100) : 0}%</span>
+            {list.length - valid.length > 0 && <span>{list.length - valid.length} anuladas</span>}
+          </div>
+        </div>
       </div>
 
-      {sales && list.length === 0 ? (
+      {!sales ? null : list.length === 0 ? (
         <Empty>No hay ventas en este periodo.</Empty>
       ) : (
-        <div className="card flush">
-          <ul className="list">
-            {list.map((s) => (
-              <li key={s.id}>
-                <button className={`list-row pick-row ${s.voided ? 'voided' : ''}`} onClick={() => setOpenId(s.id)}>
-                  <div>
-                    <strong>#{s.number}</strong> {s.customerName && <span>· {s.customerName}</span>}
-                    <div className="muted small">
-                      {fmtDateTime(s.date)} · {s.items.reduce((a, i) => a + i.qty, 0)} und
-                    </div>
-                  </div>
-                  <div className="right">
-                    <div className={s.voided ? 'strike' : ''}>{fmtMoney(s.total)}</div>
+        <div className="card flush table-wrap">
+          <table className="table stack-table">
+            <thead>
+              <tr>
+                <th>Venta</th>
+                <th>Fecha</th>
+                <th>Cliente</th>
+                <th className="num">Und</th>
+                <th>Pago</th>
+                <th className="num">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((s) => (
+                <tr
+                  key={s.id}
+                  className={`clickable-row ${s.voided ? 'voided' : ''}`}
+                  onClick={() => setOpenId(s.id)}
+                  onKeyDown={(e) => e.key === 'Enter' && setOpenId(s.id)}
+                  tabIndex={0}
+                >
+                  <td data-label="Venta">
+                    <strong>#{String(s.number).padStart(5, '0')}</strong>
+                  </td>
+                  <td data-label="Fecha" className="nowrap">
+                    {fmtDateTime(s.date)}
+                  </td>
+                  <td data-label="Cliente">{s.customerName || <span className="muted">Sin cliente</span>}</td>
+                  <td data-label="Unidades" className="num">
+                    {s.items.reduce((a, i) => a + i.qty, 0)}
+                  </td>
+                  <td data-label="Pago">
                     {s.voided ? (
                       <span className="badge badge-danger">Anulada</span>
                     ) : (
@@ -92,11 +134,14 @@ export default function Sales() {
                         {s.paymentType === 'credito' ? 'Crédito' : 'Contado'}
                       </span>
                     )}
-                  </div>
-                </button>
-              </li>
-            ))}
-          </ul>
+                  </td>
+                  <td data-label="Total" className="num">
+                    <strong className={s.voided ? 'strike' : ''}>{fmtMoney(s.total)}</strong>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
       {openId && <SaleView saleId={openId} onClose={() => setOpenId(null)} />}

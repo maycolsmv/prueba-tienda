@@ -11,6 +11,8 @@ export interface StoreSettings {
   backupReminderDays: number;
   lastBackupAt: number | null;
   nextSaleNumber: number;
+  /** Fecha en que se cargaron datos de demostración (null si no hay). */
+  demoLoadedAt: number | null;
 }
 
 export const DEFAULT_SETTINGS: StoreSettings = {
@@ -22,6 +24,7 @@ export const DEFAULT_SETTINGS: StoreSettings = {
   backupReminderDays: 7,
   lastBackupAt: null,
   nextSaleNumber: 1,
+  demoLoadedAt: null,
 };
 
 export async function getSettings(): Promise<StoreSettings> {

@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { isLowStock, loadCatalog, type ProductWithVariants } from '../lib/ops';
+import { loadCatalog, type ProductWithVariants } from '../lib/ops';
+import { fmtPct } from '../components/charts';
+import { ProductStatus, StockBar } from '../components/status';
 import { fmtMoney, normalize } from '../lib/format';
 import { Empty, PageHeader, SearchBox } from '../components/ui';
 import ProductForm from '../components/ProductForm';
@@ -32,7 +34,6 @@ export default function Products() {
   return (
     <div className="page">
       <PageHeader
-        title="Productos"
         actions={
           <>
             <button className="btn btn-ghost" onClick={() => setImporting(true)}>
@@ -61,7 +62,7 @@ export default function Products() {
         </label>
       </div>
 
-      {catalog && list.length === 0 ? (
+      {!catalog ? null : list.length === 0 ? (
         <Empty>
           {catalog.length === 0 ? (
             <>
@@ -72,38 +73,59 @@ export default function Products() {
           )}
         </Empty>
       ) : (
-        <div className="card flush">
-          <ul className="list">
-            {list.map((p) => (
-              <li key={p.id}>
-                <button className={`list-row pick-row ${p.active ? '' : 'voided'}`} onClick={() => setEditing(p)}>
-                  <div>
+        <div className="card flush table-wrap">
+          <table className="table stack-table">
+            <thead>
+              <tr>
+                <th>Producto</th>
+                <th>Tallas</th>
+                <th className="num">Precio</th>
+                <th className="num">Margen</th>
+                <th>Stock vs. mínimo</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((p) => (
+                <tr
+                  key={p.id}
+                  className={`clickable-row ${p.active ? '' : 'voided'}`}
+                  onClick={() => setEditing(p)}
+                  onKeyDown={(e) => e.key === 'Enter' && setEditing(p)}
+                  tabIndex={0}
+                >
+                  <td data-label="Producto">
                     <strong>{p.name}</strong>
                     <div className="muted small">
                       Ref {p.reference}
                       {p.category && ` · ${p.category}`}
-                      {!p.active && ' · Inactivo'}
                     </div>
-                    <div className="size-line">
+                  </td>
+                  <td data-label="Tallas">
+                    <div className="size-line" style={{ marginTop: 0 }}>
                       {p.variants.map((v) => (
                         <span key={v.id} className={`size-tag ${v.stock <= 0 ? 'zero' : ''}`}>
                           {v.size} <b>{v.stock}</b>
                         </span>
                       ))}
                     </div>
-                  </div>
-                  <div className="right">
-                    <div>{fmtMoney(p.price)}</div>
-                    {isLowStock(p) ? (
-                      <span className="badge badge-warn">Poco stock</span>
-                    ) : (
-                      <span className="muted small">{p.totalStock} und</span>
-                    )}
-                  </div>
-                </button>
-              </li>
-            ))}
-          </ul>
+                  </td>
+                  <td data-label="Precio" className="num">
+                    {fmtMoney(p.price)}
+                  </td>
+                  <td data-label="Margen" className="num">
+                    {p.price > 0 && p.cost > 0 ? fmtPct(((p.price - p.cost) / p.price) * 100) : <span className="muted">—</span>}
+                  </td>
+                  <td data-label="Stock / mín">
+                    <StockBar p={p} />
+                  </td>
+                  <td data-label="Estado">
+                    {p.active ? <ProductStatus p={p} /> : <span className="badge badge-neutral">Inactivo</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
