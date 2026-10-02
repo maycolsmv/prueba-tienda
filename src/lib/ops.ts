@@ -2,6 +2,8 @@ import {
   db,
   type CountLine,
   type Customer,
+  type Expense,
+  type ExpenseCategory,
   type MovementType,
   type Payment,
   type PaymentMethod,
@@ -13,7 +15,7 @@ import {
   type Variant,
 } from './db';
 import { getSettings, saveSettings } from './settings';
-import { compareSizes } from './format';
+import { canonicalDestination, compareSizes, destinationKey, formatDestination } from './format';
 
 export class UserError extends Error {}
 
@@ -472,17 +474,39 @@ export interface TripDraft {
   notes: string;
 }
 
+const accentCount = (s: string) => s.normalize('NFD').replace(/[^\u0300-\u036f]/g, '').length;
+
+/**
+ * Decide cómo se guarda un destino:
+ * - se limpia (espacios y mayúsculas),
+ * - si ya existe el mismo destino (sin importar mayúsculas ni tildes) se usa el existente,
+ * - salvo que lo escrito tenga más tildes: entonces esa escritura corrige a los demás viajes.
+ */
+export async function resolveDestination(input: string, excludeTripId?: number) {
+  const formatted = formatDestination(input);
+  const key = destinationKey(formatted);
+  const others = (await db.trips.toArray()).filter((t) => t.id !== excludeTripId && destinationKey(t.destination) === key);
+  if (!others.length) return { name: formatted, existing: null as string | null, renameIds: [] as number[] };
+  const existing = canonicalDestination(others.map((t) => t.destination));
+  const name = accentCount(formatted) > accentCount(existing) || (excludeTripId && accentCount(formatted) === accentCount(existing)) ? formatted : existing;
+  return { name, existing, renameIds: others.filter((t) => t.destination !== name).map((t) => t.id) };
+}
+
 export async function saveTrip(d: TripDraft) {
-  const destination = d.destination.trim();
-  if (!destination) throw new UserError('Escribe el destino del viaje.');
+  if (!formatDestination(d.destination)) throw new UserError('Escribe el destino del viaje.');
   if (d.endDate && d.endDate < d.startDate) throw new UserError('La fecha de regreso es antes de la salida.');
-  const data = { destination, startDate: d.startDate, endDate: d.endDate, notes: d.notes.trim() };
-  if (d.id) {
-    await db.trips.update(d.id, data);
-    return d.id;
-  }
-  if (await getActiveTrip()) throw new UserError('Ya hay un viaje abierto. Ciérralo antes de crear otro.');
-  return (await db.trips.add({ ...data, status: 'abierto', createdAt: Date.now(), closedAt: null } as Trip)) as number;
+  return db.transaction('rw', db.trips, async () => {
+    const { name, renameIds } = await resolveDestination(d.destination, d.id);
+    const data = { destination: name, startDate: d.startDate, endDate: d.endDate, notes: d.notes.trim() };
+    // La escritura corregida queda igual en todos los viajes de ese destino.
+    for (const id of renameIds) await db.trips.update(id, { destination: name });
+    if (d.id) {
+      await db.trips.update(d.id, data);
+      return d.id;
+    }
+    if (await getActiveTrip()) throw new UserError('Ya hay un viaje abierto. Ciérralo antes de crear otro.');
+    return (await db.trips.add({ ...data, status: 'abierto', createdAt: Date.now(), closedAt: null } as Trip)) as number;
+  });
 }
 
 async function openTrip(tripId: number) {
@@ -567,4 +591,38 @@ export async function deleteTrip(tripId: number) {
     await db.tripItems.where('tripId').equals(tripId).delete();
     await db.trips.delete(tripId);
   });
+}
+
+// ---------- Gastos ----------
+
+export interface ExpenseDraft {
+  id?: number;
+  date: number;
+  category: ExpenseCategory;
+  amount: number;
+  method: PaymentMethod;
+  tripId: number | null;
+  note: string;
+}
+
+export async function saveExpense(d: ExpenseDraft) {
+  if (!(d.amount > 0)) throw new UserError('El valor del gasto debe ser mayor a cero.');
+  if (d.tripId !== null && !(await db.trips.get(d.tripId))) throw new UserError('El viaje ya no existe.');
+  const data = {
+    date: d.date,
+    category: d.category,
+    amount: Math.round(d.amount),
+    method: d.method,
+    tripId: d.tripId,
+    note: d.note.trim(),
+  };
+  if (d.id) {
+    await db.expenses.update(d.id, data);
+    return d.id;
+  }
+  return (await db.expenses.add({ ...data, createdAt: Date.now() } as Expense)) as number;
+}
+
+export async function deleteExpense(id: number) {
+  await db.expenses.delete(id);
 }

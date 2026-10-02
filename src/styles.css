@@ -2137,3 +2137,54 @@ a.kpi:hover {
 .field .segmented button {
   padding: 0 8px;
 }
+
+/* =========================================================
+   Gastos
+   ========================================================= */
+.choice-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.choice {
+  min-height: 40px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 0.86rem;
+}
+.choice.active {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+  color: var(--primary-ink);
+  font-weight: 600;
+}
+.link-btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--primary-ink);
+  font-weight: 600;
+  cursor: pointer;
+}
+.cash-box {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.9rem;
+}
+.cash-total {
+  padding-top: 6px;
+  border-top: 1px dashed var(--border-strong);
+  font-size: 1rem;
+}
+.kpi-foot-line {
+  flex-basis: 100%;
+}
+.dest-hint {
+  color: var(--info);
+}

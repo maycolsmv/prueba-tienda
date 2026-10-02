@@ -104,19 +104,20 @@ export default function Home() {
             <Kpi label="Ticket promedio" value={fmtMoney(d.kpi.ticket.value)} icon="ticket" foot={<Delta change={d.kpi.ticket.change} />} />
             <Kpi label="Unidades vendidas" value={fmtNum(d.kpi.units.value)} icon="box" foot={<Delta change={d.kpi.units.change} />} />
             <Kpi
-              label="Margen bruto"
-              value={d.kpi.margin.value === null ? '—' : fmtPct(d.kpi.margin.value, 1)}
+              label="Utilidad real"
+              value={fmtMoney(d.kpi.profit.value)}
               icon="percent"
-              tone="ok"
+              tone={d.kpi.profit.value < 0 ? 'danger' : 'ok'}
+              to="/gastos"
               foot={
-                d.kpi.margin.diff === null ? (
-                  <span>Precio de venta vs. costo</span>
-                ) : (
-                  <>
-                    <Delta change={d.kpi.margin.diff} suffix=" pts" />
-                    <span>vs. costo</span>
-                  </>
-                )
+                <>
+                  <Delta change={d.kpi.profit.change} />
+                  {d.kpi.profit.pct !== null && <span>{fmtPct(d.kpi.profit.pct, 1)} de las ventas</span>}
+                  <span className="kpi-foot-line">
+                    Gastos {fmtMoney(d.kpi.profit.expenses)}
+                    {d.kpi.margin.value !== null && ` · margen bruto ${fmtPct(d.kpi.margin.value, 1)}`}
+                  </span>
+                </>
               }
             />
             <Kpi

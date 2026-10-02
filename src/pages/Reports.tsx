@@ -3,13 +3,13 @@ import { Link } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../lib/db';
 import { allBalances, loadCatalog } from '../lib/ops';
-import { endOfDay, fmtDate, fmtMoney, fmtNum, startOfDay, toDateInput } from '../lib/format';
+import { destinationKey, destinationNames, endOfDay, fmtDate, fmtMoney, fmtNum, startOfDay, toDateInput } from '../lib/format';
 import { exportXlsx } from '../lib/excel';
 import { debtAging, moneyByMethod } from '../lib/stats';
 import { Field, PageHeader, Tabs } from '../components/ui';
 import { ChartCard, ChartEmpty, ColumnChart, fmtPct, MethodsBar, SegmentBar, ShareBars, TrendChart, useChartColors } from '../components/charts';
 
-type Tab = 'ventas' | 'top' | 'rotacion' | 'existencias' | 'cartera';
+type Tab = 'ventas' | 'top' | 'rotacion' | 'existencias' | 'cartera' | 'destinos';
 
 const DAY = 86_400_000;
 
@@ -30,7 +30,7 @@ export default function Reports() {
   const r = useLiveQuery(async () => {
     const a = startOfDay(from);
     const b = endOfDay(to);
-    const [sales, catalog, balances, customers, ledger, allLedger, lastSaleMovs] = await Promise.all([
+    const [sales, catalog, balances, customers, ledger, allLedger, lastSaleMovs, expenses, trips] = await Promise.all([
       db.sales.where('date').between(a, b, true, true).toArray(),
       loadCatalog(),
       allBalances(),
@@ -38,6 +38,8 @@ export default function Reports() {
       db.ledger.where('date').between(a, b, true, true).toArray(),
       db.ledger.toArray(),
       db.movements.where('type').equals('venta').toArray(),
+      db.expenses.where('date').between(a, b, true, true).toArray(),
+      db.trips.toArray(),
     ]);
     const valid = sales.filter((s) => !s.voided);
 
@@ -100,6 +102,37 @@ export default function Reports() {
       .sort((x, y) => y.balance - x.balance);
 
     const costOf = new Map(catalog.map((p) => [p.id, p.cost]));
+
+    // Por destino: "malaga", "Malaga" y "Málaga" cuentan como el mismo destino.
+    const destName = destinationNames(trips.map((t) => t.destination));
+    const tripKey = new Map(trips.map((t) => [t.id, destinationKey(t.destination)]));
+    const byDest = new Map<string, { name: string; trips: Set<number>; sales: number; units: number; total: number; cost: number; expenses: number }>();
+    const dest = (key: string) => {
+      let g = byDest.get(key);
+      if (!g) byDest.set(key, (g = { name: destName.get(key) ?? key, trips: new Set(), sales: 0, units: 0, total: 0, cost: 0, expenses: 0 }));
+      return g;
+    };
+    for (const x of valid) {
+      if (!x.tripId || !tripKey.has(x.tripId)) continue;
+      const g = dest(tripKey.get(x.tripId)!);
+      g.trips.add(x.tripId);
+      g.sales++;
+      g.total += x.total;
+      for (const i of x.items) {
+        g.units += i.qty;
+        g.cost += i.qty * (costOf.get(i.productId) ?? 0);
+      }
+    }
+    for (const e of expenses) {
+      if (!e.tripId || !tripKey.has(e.tripId)) continue;
+      const g = dest(tripKey.get(e.tripId)!);
+      g.trips.add(e.tripId);
+      g.expenses += e.amount;
+    }
+    const destinations = [...byDest.values()]
+      .map((g) => ({ ...g, trips: g.trips.size, profit: g.total - g.cost - g.expenses }))
+      .sort((x, y) => y.total - x.total);
+    const homeSales = valid.filter((x) => !x.tripId);
     const total = valid.reduce((s, x) => s + x.total, 0);
     return {
       total,
@@ -119,6 +152,9 @@ export default function Reports() {
       aging: buckets,
       methods: moneyByMethod(valid, ledger),
       cartera: debtors.reduce((a, c) => a + c.balance, 0),
+      expenses: expenses.reduce((s, e) => s + e.amount, 0),
+      destinations,
+      home: { sales: homeSales.length, total: homeSales.reduce((a, x) => a + x.total, 0) },
       abonos: ledger.filter((e) => e.type === 'abono' && !e.note.startsWith('Anulación')).reduce((a, e) => a + e.amount, 0),
     };
   }, [from, to]);
@@ -144,6 +180,8 @@ export default function Reports() {
           { Concepto: 'Unidades vendidas', Valor: r.units },
           { Concepto: 'Costo de lo vendido', Valor: r.cost },
           { Concepto: 'Ganancia bruta', Valor: r.total - r.cost },
+          { Concepto: 'Gastos', Valor: r.expenses },
+          { Concepto: 'Utilidad real (ventas - costo - gastos)', Valor: r.total - r.cost - r.expenses },
           { Concepto: 'Margen bruto %', Valor: r.total ? Math.round(((r.total - r.cost) / r.total) * 1000) / 10 : 0 },
           { Concepto: 'Abonos recibidos', Valor: r.abonos },
           { Concepto: 'Recibido en efectivo', Valor: r.methods.efectivo },
@@ -174,6 +212,19 @@ export default function Reports() {
         rows: r.debtors.map((c) => ({ Cliente: c.name, Celular: c.phone, Saldo: c.balance, DiasDeudaMasAntigua: c.days ?? '' })),
       },
       { name: 'Antiguedad cartera', rows: r.aging.map((b) => ({ Rango: b.label, Valor: b.amount })) },
+      {
+        name: 'Por destino',
+        rows: r.destinations.map((d) => ({
+          Destino: d.name,
+          Viajes: d.trips,
+          Ventas: d.sales,
+          Unidades: d.units,
+          TotalVendido: d.total,
+          CostoVendido: d.cost,
+          Gastos: d.expenses,
+          Utilidad: d.profit,
+        })),
+      },
     ]);
   };
 
@@ -218,6 +269,7 @@ export default function Reports() {
           { value: 'rotacion', label: 'Baja rotación' },
           { value: 'existencias', label: 'Existencias' },
           { value: 'cartera', label: 'Cartera' },
+          { value: 'destinos', label: 'Destinos' },
         ]}
       />
 
@@ -245,9 +297,12 @@ export default function Reports() {
               </div>
             </div>
             <div className="kpi">
-              <span className="kpi-label">Abonos recibidos</span>
-              <div className="kpi-value">{fmtMoney(r.abonos)}</div>
-              <div className="kpi-foot">{r.voided ? `${r.voided} ventas anuladas` : 'Sin ventas anuladas'}</div>
+              <span className="kpi-label">Utilidad real</span>
+              <div className={`kpi-value ${r.total - r.cost - r.expenses < 0 ? 'text-danger' : ''}`}>{fmtMoney(r.total - r.cost - r.expenses)}</div>
+              <div className="kpi-foot">
+                {r.total > 0 && <span className="badge no-dot badge-ok">{fmtPct(((r.total - r.cost - r.expenses) / r.total) * 100, 1)}</span>}
+                <span>Gastos {fmtMoney(r.expenses)}</span>
+              </div>
             </div>
           </div>
           <div className="dash-grid">
@@ -493,6 +548,70 @@ export default function Reports() {
                   </li>
                 ))}
               </ul>
+            </div>
+          )}
+        </>
+      )}
+{r && tab === 'destinos' && (
+        <>
+          <ChartCard title="Ventas por destino" subtitle="Viajes con ventas o gastos en el periodo · mayúsculas y tildes se agrupan">
+            {r.destinations.length ? (
+              <ShareBars
+                data={r.destinations.map((d) => ({
+                  name: d.name,
+                  value: d.total,
+                  pct: r.destinations.reduce((a, x) => a + x.total, 0) ? (d.total / r.destinations.reduce((a, x) => a + x.total, 0)) * 100 : 0,
+                }))}
+              />
+            ) : (
+              <ChartEmpty icon="plane" text="No hay viajes en el periodo." />
+            )}
+            {r.home.sales > 0 && (
+              <p className="muted small" style={{ margin: 0 }}>
+                Fuera de viajes (desde bodega): {r.home.sales} ventas por {fmtMoney(r.home.total)}.
+              </p>
+            )}
+          </ChartCard>
+          {r.destinations.length > 0 && (
+            <div className="card flush table-wrap">
+              <table className="table stack-table">
+                <thead>
+                  <tr>
+                    <th>Destino</th>
+                    <th className="num">Viajes</th>
+                    <th className="num">Unidades</th>
+                    <th className="num">Vendido</th>
+                    <th className="num">Gastos</th>
+                    <th className="num">Utilidad</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {r.destinations.map((d) => (
+                    <tr key={d.name}>
+                      <td data-label="Destino">
+                        <strong>{d.name}</strong>
+                        <div className="muted small">{d.sales} ventas</div>
+                      </td>
+                      <td data-label="Viajes" className="num">
+                        {d.trips}
+                      </td>
+                      <td data-label="Unidades" className="num">
+                        {d.units}
+                      </td>
+                      <td data-label="Vendido" className="num">
+                        {fmtMoney(d.total)}
+                      </td>
+                      <td data-label="Gastos" className="num">
+                        {fmtMoney(d.expenses)}
+                      </td>
+                      <td data-label="Utilidad" className="num">
+                        <strong className={d.profit < 0 ? 'text-danger' : ''}>{fmtMoney(d.profit)}</strong>
+                        {d.total > 0 && <div className="muted small">{fmtPct((d.profit / d.total) * 100, 1)}</div>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </>

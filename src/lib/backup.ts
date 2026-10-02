@@ -1,5 +1,6 @@
 import { db, migrateLedgerV2, migrateSaleV2, TABLES, type LedgerEntry, type Sale } from './db';
 import { saveSettings } from './settings';
+import { formatDestination } from './format';
 import { UserError } from './ops';
 
 const FORMAT = 'tienda-ropa-respaldo';
@@ -7,7 +8,7 @@ const FORMAT = 'tienda-ropa-respaldo';
 export async function createBackup() {
   const data: Record<string, unknown[]> = {};
   for (const t of TABLES) data[t] = await db.table(t).toArray();
-  const payload = { format: FORMAT, version: 1, createdAt: Date.now(), data };
+  const payload = { format: FORMAT, version: 3, createdAt: Date.now(), data };
   const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, '0');
@@ -54,6 +55,10 @@ export async function restoreBackup(data: Record<string, unknown[]>) {
   // Respaldos anteriores a la versión 2 (sin viajes ni medios de pago) se completan igual que en la migración.
   data.sales = (data.sales ?? []).map((x) => migrateSaleV2(x as Partial<Sale>));
   data.ledger = (data.ledger ?? []).map((x) => migrateLedgerV2(x as Partial<LedgerEntry>));
+  data.trips = (data.trips ?? []).map((x) => {
+    const t = x as { destination?: string };
+    return { ...t, destination: formatDestination(t.destination ?? '') };
+  });
   await db.transaction('rw', TABLES.map((t) => db.table(t)), async () => {
     for (const t of TABLES) {
       await db.table(t).clear();

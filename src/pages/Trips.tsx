@@ -1,10 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Trip } from '../lib/db';
-import { saveTrip } from '../lib/ops';
+import { resolveDestination, saveTrip } from '../lib/ops';
 import { tripList } from '../lib/trips';
-import { fmtDate, fmtMoney, startOfDay, toDateInput } from '../lib/format';
+import { destinationNames, fmtDate, fmtMoney, startOfDay, toDateInput } from '../lib/format';
 import { Empty, Field, Modal, PageHeader, useAction } from '../components/ui';
 import { Icon } from '../components/Icon';
 import { fmtPct } from '../components/charts';
@@ -72,6 +72,7 @@ export default function Trips() {
                 <th className="num">Llevadas</th>
                 <th className="num">Vendidas</th>
                 <th className="num">Total vendido</th>
+                <th className="num">Gastos</th>
                 <th>Estado</th>
               </tr>
             </thead>
@@ -112,6 +113,9 @@ function TripRow({ t }: { t: Awaited<ReturnType<typeof tripList>>[number] }) {
       <td data-label="Total" className="num">
         <strong>{fmtMoney(t.total)}</strong>
       </td>
+      <td data-label="Gastos" className="num">
+        {fmtMoney(t.expenses)}
+      </td>
       <td data-label="Estado">
         {t.status === 'abierto' ? <span className="badge badge-info">En curso</span> : <span className="badge badge-neutral">Cerrado</span>}
       </td>
@@ -126,7 +130,23 @@ export function TripForm({ trip, onClose }: { trip?: Trip; onClose: () => void }
   const [end, setEnd] = useState(trip?.endDate ? toDateInput(trip.endDate) : '');
   const [notes, setNotes] = useState(trip?.notes ?? '');
   const { run, busy } = useAction();
-  const destinations = useLiveQuery(async () => [...new Set((await db.trips.toArray()).map((t) => t.destination))].sort(), []);
+  // Un nombre por destino (agrupando mayúsculas y tildes).
+  const destinations = useLiveQuery(
+    async () => [...destinationNames((await db.trips.toArray()).map((t) => t.destination)).values()].sort((a, b) => a.localeCompare(b)),
+    [],
+  );
+  const [preview, setPreview] = useState<Awaited<ReturnType<typeof resolveDestination>> | null>(null);
+  useEffect(() => {
+    let alive = true;
+    if (!destination.trim()) {
+      setPreview(null);
+      return;
+    }
+    resolveDestination(destination, trip?.id).then((p) => alive && setPreview(p));
+    return () => {
+      alive = false;
+    };
+  }, [destination, trip?.id]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -163,6 +183,26 @@ export function TripForm({ trip, onClose }: { trip?: Trip; onClose: () => void }
               <option key={d} value={d} />
             ))}
           </datalist>
+          {preview && preview.name !== destination && (
+            <span className="field-hint dest-hint">
+              {preview.existing && preview.name === preview.existing ? (
+                <>
+                  Ya existe: se usará <b>{preview.name}</b>
+                </>
+              ) : (
+                <>
+                  Se guardará como <b>{preview.name}</b>
+                </>
+              )}
+              {preview.renameIds.length > 0 && ` · también se corregirá en ${preview.renameIds.length} ${preview.renameIds.length === 1 ? 'viaje' : 'viajes'} más`}
+            </span>
+          )}
+          {preview && preview.name === destination && preview.renameIds.length > 0 && (
+            <span className="field-hint dest-hint">
+              También se corregirá en {preview.renameIds.length} {preview.renameIds.length === 1 ? 'viaje que dice' : 'viajes que dicen'}{' '}
+              <b>{preview.existing}</b>
+            </span>
+          )}
         </Field>
         <div className="grid-2">
           <Field label="Fecha de salida">

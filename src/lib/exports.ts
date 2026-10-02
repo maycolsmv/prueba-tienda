@@ -1,7 +1,8 @@
-import { db, methodLabel, type Sale } from './db';
+import { categoryLabel, db, methodLabel, type Sale } from './db';
+import { tripSummary } from './trips';
 import { exportXlsx, type Sheet } from './excel';
 import { allBalances, loadCatalog } from './ops';
-import { fmtDate, fmtDateTime, toDateInput } from './format';
+import { destinationKey, destinationNames, fmtDate, fmtDateTime, toDateInput } from './format';
 
 const stamp = () => toDateInput(Date.now());
 
@@ -59,8 +60,11 @@ function salesSheets(sales: Sale[], tripNames: Map<number, string>): Sheet[] {
   ];
 }
 
+/** Viaje → nombre del destino (agrupando mayúsculas y tildes). */
 async function tripNameMap() {
-  return new Map((await db.trips.toArray()).map((t) => [t.id, t.destination]));
+  const trips = await db.trips.toArray();
+  const display = destinationNames(trips.map((t) => t.destination));
+  return new Map(trips.map((t) => [t.id, display.get(destinationKey(t.destination)) ?? t.destination]));
 }
 
 export async function exportSales(sales: Sale[], from: string, to: string) {
@@ -163,5 +167,60 @@ export async function exportEverything() {
     ...salesSheets(sales, await tripNameMap()),
     ...(await customerSheets()),
     ...(await movementSheets()),
+    ...(await expenseAndTripSheets()),
   ]);
+}
+
+async function expenseAndTripSheets(): Promise<Sheet[]> {
+  const [expenses, names] = await Promise.all([db.expenses.orderBy('date').toArray(), tripNameMap()]);
+  const trips = await db.trips.orderBy('startDate').toArray();
+  const display = destinationNames(trips.map((t) => t.destination));
+  const nameOf = (d: string) => display.get(destinationKey(d)) ?? d;
+  const rows = [];
+  const byDest = new Map<string, { Destino: string; Viajes: number; Llevadas: number; Vendidas: number; TotalVendido: number; Gastos: number; Utilidad: number; CarteraPendiente: number }>();
+  for (const t of trips) {
+    const sm = await tripSummary(t.id);
+    if (!sm) continue;
+    const g = byDest.get(destinationKey(t.destination)) ?? { Destino: nameOf(t.destination), Viajes: 0, Llevadas: 0, Vendidas: 0, TotalVendido: 0, Gastos: 0, Utilidad: 0, CarteraPendiente: 0 };
+    g.Viajes++;
+    g.Llevadas += sm.units.loaded;
+    g.Vendidas += sm.units.sold;
+    g.TotalVendido += sm.total;
+    g.Gastos += sm.expenses;
+    g.Utilidad += sm.profit;
+    g.CarteraPendiente += sm.carteraOpen;
+    byDest.set(destinationKey(t.destination), g);
+    rows.push({
+      Destino: nameOf(t.destination),
+      Salida: fmtDate(t.startDate),
+      Regreso: t.endDate ? fmtDate(t.endDate) : '',
+      Estado: t.status === 'abierto' ? 'En curso' : 'Cerrado',
+      Llevadas: sm.units.loaded,
+      Vendidas: sm.units.sold,
+      Devueltas: sm.units.returned,
+      TotalVendido: sm.total,
+      CostoVendido: sm.cost,
+      Gastos: sm.expenses,
+      Utilidad: sm.profit,
+      Efectivo: sm.methods.efectivo,
+      Nequi: sm.methods.nequi,
+      Transferencia: sm.methods.transferencia,
+      CarteraPendiente: sm.carteraOpen,
+    });
+  }
+  return [
+    { name: 'Viajes', rows },
+    { name: 'Por destino', rows: [...byDest.values()].sort((a, b) => b.TotalVendido - a.TotalVendido) },
+    {
+      name: 'Gastos',
+      rows: expenses.map((e) => ({
+        Fecha: fmtDate(e.date),
+        Categoria: categoryLabel(e.category),
+        Valor: e.amount,
+        Medio: methodLabel(e.method),
+        Viaje: e.tripId ? nameOf(names.get(e.tripId) ?? '') : 'General',
+        Nota: e.note,
+      })),
+    },
+  ];
 }

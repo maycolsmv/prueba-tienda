@@ -3,6 +3,7 @@
 import {
   db,
   type Customer,
+  type Expense,
   type LedgerEntry,
   type Movement,
   type Payment,
@@ -21,7 +22,7 @@ const DAY = 86_400_000;
 const HOUR = 3_600_000;
 const DEMO_KEY = 'demo';
 
-type IdKey = 'products' | 'variants' | 'customers' | 'sales' | 'ledger' | 'movements' | 'trips' | 'tripItems';
+type IdKey = 'products' | 'variants' | 'customers' | 'sales' | 'ledger' | 'movements' | 'trips' | 'tripItems' | 'expenses';
 
 export interface DemoInfo {
   loadedAt: number;
@@ -114,7 +115,9 @@ const CUSTOMERS: [string, string, string][] = [
 ];
 
 // Viajes: [destino, día de salida (desde el inicio), días de duración, notas]. El último queda abierto.
-const TRIPS: [string, number, number, string][] = [
+export type DemoTrip = [destino: string, diaSalida: number, dias: number, notas: string];
+
+const DEFAULT_TRIPS: DemoTrip[] = [
   ['Medellín', 8, 6, 'Feria de El Poblado y ventas a domicilio'],
   ['Cali', 33, 5, 'Hotel en Granada'],
   ['Medellín', 60, 6, 'Segunda visita: llevar más jeans'],
@@ -128,12 +131,26 @@ const METHODS: [PaymentMethod, number][] = [
   ['otro', 0.05],
 ];
 
-export async function loadDemoData() {
-  if (await getDemoInfo()) throw new UserError('Los datos de demostración ya están cargados.');
-  if (await db.trips.where('status').equals('abierto').count())
+export interface DemoOptions {
+  trips?: DemoTrip[];
+  /** Días de historia hacia atrás desde hoy. */
+  days?: number;
+  /** Si el último viaje queda en curso. */
+  lastOpen?: boolean;
+  seed?: number;
+  /** false = no marcar como demostración (para generar respaldos de prueba). */
+  markAsDemo?: boolean;
+}
+
+export async function loadDemoData(opts: DemoOptions = {}) {
+  const TRIPS = opts.trips ?? DEFAULT_TRIPS;
+  const lastOpen = opts.lastOpen ?? true;
+  const markAsDemo = opts.markAsDemo ?? true;
+  if (markAsDemo && (await getDemoInfo())) throw new UserError('Los datos de demostración ya están cargados.');
+  if (lastOpen && (await db.trips.where('status').equals('abierto').count()))
     throw new UserError('Tienes un viaje abierto. Ciérralo antes de cargar la demostración (la demo incluye un viaje en curso).');
   const settings = await getSettings();
-  const r = rng(20261001);
+  const r = rng(opts.seed ?? 20261001);
   const pick = <T,>(arr: T[], w: (x: T) => number) => {
     const total = arr.reduce((s, x) => s + w(x), 0);
     let t = r() * total;
@@ -143,11 +160,11 @@ export async function loadDemoData() {
   const method = () => pick(METHODS, (m) => m[1])[0];
   const now = Date.now();
   const today = new Date(new Date().setHours(0, 0, 0, 0)).getTime();
-  const DAYS = 100;
+  const DAYS = opts.days ?? 100;
   const start = today - DAYS * DAY;
   const dayAt = (i: number) => start + i * DAY;
 
-  const tables = [db.products, db.variants, db.customers, db.sales, db.ledger, db.movements, db.settings, db.trips, db.tripItems];
+  const tables = [db.products, db.variants, db.customers, db.sales, db.ledger, db.movements, db.settings, db.trips, db.tripItems, db.expenses];
   return db.transaction('rw', tables, async () => {
     // ---------- Productos y tallas ----------
     const productIds = (await db.products.bulkAdd(
@@ -182,7 +199,7 @@ export async function loadDemoData() {
 
     // ---------- Viajes ----------
     const tripRows = TRIPS.map(([destination, d, len, notes], i) => {
-      const isLast = i === TRIPS.length - 1;
+      const isLast = lastOpen && i === TRIPS.length - 1;
       return {
         destination,
         startDate: dayAt(d),
@@ -245,8 +262,8 @@ export async function loadDemoData() {
       const ti = tripOn(day);
       const trip = ti >= 0 ? TRIPS[ti] : null;
 
-      // Reposición de bodega entre viajes
-      if ([24, 52, 82].includes(day))
+      // Reposición de bodega unos días antes de cada viaje (menos el primero)
+      if (TRIPS.slice(1).some(([, d]) => day === d - 3))
         variantDefs.forEach((v, vi) => {
           if (NO_RESTOCK.includes(PRODUCTS[v.p][0])) return;
           const cur = bodega.get(variantIds[vi]) ?? 0;
@@ -372,7 +389,7 @@ export async function loadDemoData() {
       }
 
       // Regreso: lo que no se vendió vuelve a bodega (el último viaje sigue abierto)
-      if (trip && ti < TRIPS.length - 1 && day === trip[1] + trip[2] - 1) {
+      if (trip && (ti < TRIPS.length - 1 || !lastOpen) && day === trip[1] + trip[2] - 1) {
         const closeAt = dayStart + 21 * HOUR;
         variantDefs.forEach((_, vi) => {
           const key = `${ti}|${variantIds[vi]}`;
@@ -385,6 +402,29 @@ export async function loadDemoData() {
           moveBodega(vi, left, 'regreso_viaje', `Regreso del viaje a ${trip[0]}`, closeAt, -1 - ti);
         });
       }
+    }
+
+    // ---------- Gastos ----------
+    const round = (n: number) => Math.round(n / 1000) * 1000;
+    const expenses: (Omit<Expense, 'id' | 'tripId'> & { tripIndex: number | null })[] = [];
+    const spend = (date: number, category: Expense['category'], amount: number, m: PaymentMethod, tripIndex: number | null, note: string) => {
+      if (date <= now) expenses.push({ date, category, amount: round(amount), method: m, tripIndex, note, createdAt: date });
+    };
+    TRIPS.forEach(([destination, d, len], ti) => {
+      const out = dayAt(d) + 5 * HOUR;
+      const back = dayAt(d + len - 1) + 18 * HOUR;
+      const fare = 70000 + r() * 70000;
+      spend(dayAt(d - 1) + 19 * HOUR, 'empaques', 35000 + r() * 30000, 'efectivo', ti, 'Bolsas y papel de seda');
+      spend(out, 'pasajes', fare, r() < 0.6 ? 'transferencia' : 'efectivo', ti, `Bus a ${destination}`);
+      spend(dayAt(d) + 15 * HOUR, 'hospedaje', (len - 1) * (65000 + r() * 45000), r() < 0.5 ? 'transferencia' : 'nequi', ti, `Hotel ${len - 1} noches`);
+      for (let k = 0; k < len; k++) spend(dayAt(d + k) + 13 * HOUR, 'comida', 22000 + r() * 25000, r() < 0.8 ? 'efectivo' : 'nequi', ti, 'Almuerzo y comida');
+      if (r() < 0.7) spend(dayAt(d + Math.floor(len / 2)) + 17 * HOUR, 'envios', 15000 + r() * 15000, 'efectivo', ti, 'Envío a clienta');
+      spend(back, 'pasajes', fare, r() < 0.6 ? 'transferencia' : 'efectivo', ti, 'Bus de regreso');
+    });
+    // Gastos generales: envíos y empaques cada cierto tiempo
+    for (let day = 5; day <= DAYS; day += 9 + Math.floor(r() * 6)) {
+      if (tripOn(day) >= 0) continue;
+      spend(dayAt(day) + 16 * HOUR, r() < 0.6 ? 'envios' : 'empaques', 14000 + r() * 22000, r() < 0.5 ? 'efectivo' : 'nequi', null, r() < 0.6 ? 'Envío por transportadora' : 'Bolsas');
     }
 
     // ---------- Guardar ----------
@@ -413,6 +453,10 @@ export async function loadDemoData() {
       { allKeys: true },
     )) as number[];
     await Promise.all(variantIds.map((id) => db.variants.update(id, { stock: bodega.get(id) ?? 0 })));
+    const expenseIds = (await db.expenses.bulkAdd(
+      expenses.map(({ tripIndex, ...e }) => ({ ...e, tripId: mapTrip(tripIndex) })) as Expense[],
+      { allKeys: true },
+    )) as number[];
 
     const info: DemoInfo = {
       loadedAt: Date.now(),
@@ -428,10 +472,13 @@ export async function loadDemoData() {
         movements: movementIds,
         trips: tripIds,
         tripItems: tripItemIds,
+        expenses: expenseIds,
       },
     };
-    await db.settings.put({ key: DEMO_KEY, value: info });
-    await saveSettings({ nextSaleNumber: number, demoLoadedAt: info.loadedAt });
+    if (markAsDemo) {
+      await db.settings.put({ key: DEMO_KEY, value: info });
+      await saveSettings({ nextSaleNumber: number, demoLoadedAt: info.loadedAt });
+    } else await saveSettings({ nextSaleNumber: number });
     return { products: productIds.length, customers: customerIds.length, sales: saleIds.length, trips: tripIds.length };
   });
 }
@@ -443,7 +490,7 @@ export async function loadDemoData() {
 export async function removeDemoData() {
   const info = await getDemoInfo();
   if (!info) throw new UserError('No hay datos de demostración cargados.');
-  const tables = [db.products, db.variants, db.customers, db.sales, db.ledger, db.movements, db.settings, db.trips, db.tripItems];
+  const tables = [db.products, db.variants, db.customers, db.sales, db.ledger, db.movements, db.settings, db.trips, db.tripItems, db.expenses];
   await db.transaction('rw', tables, async () => {
     const products = new Set(info.ids.products);
     const customers = new Set(info.ids.customers);
@@ -456,6 +503,8 @@ export async function removeDemoData() {
     // Ventas reales hechas dentro de un viaje de demostración quedan como ventas sin viaje.
     await db.sales.filter((s) => s.tripId !== null && trips.has(s.tripId)).modify({ tripId: null });
     await db.tripItems.filter((i) => trips.has(i.tripId)).delete();
+    await db.expenses.bulkDelete(info.ids.expenses ?? []);
+    await db.expenses.filter((e) => e.tripId !== null && trips.has(e.tripId)).delete();
     await db.trips.bulkDelete([...trips]);
     await db.variants.bulkDelete(info.ids.variants);
     await db.products.bulkDelete(info.ids.products);

@@ -170,13 +170,17 @@ const WEEKDAYS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 
 export async function dashboardData(key: PeriodKey) {
   const { current, previous, label } = periodRanges(key);
-  const [catalog, allSales, balances, customers, ledger] = await Promise.all([
+  const [catalog, allSales, balances, customers, ledger, expenses] = await Promise.all([
     loadCatalog(true),
     db.sales.where('date').between(previous.from, current.to, true, true).toArray(),
     allBalances(),
     db.customers.toArray(),
     db.ledger.toArray(),
+    db.expenses.where('date').between(previous.from, current.to, true, true).toArray(),
   ]);
+  const spent = (r: Range) => expenses.filter((e) => e.date >= r.from && e.date <= r.to).reduce((s, e) => s + e.amount, 0);
+  const curExpenses = spent(current);
+  const prevExpenses = spent(previous);
   const productMap = new Map(catalog.map((p) => [p.id, p]));
   const costOf = (id: number) => productMap.get(id)?.cost ?? 0;
   const valid = allSales.filter((s) => !s.voided);
@@ -289,6 +293,12 @@ export async function dashboardData(key: PeriodKey) {
       ticket: { value: a.count ? a.total / a.count : 0, change: pctChange(a.count ? a.total / a.count : 0, b.count ? b.total / b.count : 0) },
       units: { value: a.units, change: pctChange(a.units, b.units) },
       margin: { value: margin, diff: margin !== null && prevMargin !== null ? margin - prevMargin : null },
+      profit: {
+        value: a.total - a.cost - curExpenses,
+        pct: a.total > 0 ? ((a.total - a.cost - curExpenses) / a.total) * 100 : null,
+        change: pctChange(a.total - a.cost - curExpenses, b.total - b.cost - prevExpenses),
+        expenses: curExpenses,
+      },
       cartera: { value: debtors.reduce((s, d) => s + d.balance, 0), debtors: debtors.length },
       inventory: { cost: inv.cost, value: inv.value, units: inv.units },
       stock: { low: inv.counts.poco, out: inv.counts.agotado, products: inv.products },

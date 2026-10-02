@@ -16,6 +16,7 @@ import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import Trips from './pages/Trips';
 import TripDetail from './pages/TripDetail';
+import Expenses from './pages/Expenses';
 
 registerSW({ immediate: true });
 
@@ -37,6 +38,7 @@ const router = createBrowserRouter([
       { path: '/ajustes', element: <Settings /> },
       { path: '/viajes', element: <Trips /> },
       { path: '/viajes/:id', element: <TripDetail /> },
+      { path: '/gastos', element: <Expenses /> },
       { path: '*', element: <Home /> },
     ],
   },

@@ -1,18 +1,19 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db } from '../lib/db';
+import { categoryLabel, db, methodLabel, type Expense } from '../lib/db';
+import ExpenseForm from '../components/ExpenseForm';
 import { closeTrip, deleteTrip, loadCatalog, loadTripStock, returnTripStock, type ProductWithVariants } from '../lib/ops';
 import { tripSummary, type TripLine } from '../lib/trips';
 import { createBackup } from '../lib/backup';
-import { fmtDateTime, fmtMoney, fmtNum, normalize } from '../lib/format';
+import { fmtDate, fmtDateTime, fmtMoney, fmtNum, normalize } from '../lib/format';
 import { Empty, Modal, NumberInput, SearchBox, Tabs, useAction, useConfirm, useToast } from '../components/ui';
 import { Icon } from '../components/Icon';
-import { fmtPct, MethodsBar, SegmentBar, useChartColors } from '../components/charts';
+import { ChartCard, fmtPct, MethodsBar, SegmentBar, ShareBars, useChartColors } from '../components/charts';
 import SaleView from '../components/SaleView';
 import { TripForm, tripDates } from './Trips';
 
-type Tab = 'resumen' | 'mercancia' | 'ventas';
+type Tab = 'resumen' | 'mercancia' | 'ventas' | 'gastos';
 
 export default function TripDetail() {
   const id = Number(useParams().id);
@@ -23,6 +24,7 @@ export default function TripDetail() {
   const [editing, setEditing] = useState(false);
   const [saleId, setSaleId] = useState<number | null>(null);
   const [giveBack, setGiveBack] = useState<TripLine | null>(null);
+  const [expense, setExpense] = useState<Expense | 'new' | null>(null);
   const { run, busy } = useAction();
   const confirm = useConfirm();
   const toast = useToast();
@@ -109,6 +111,9 @@ export default function TripDetail() {
               Eliminar
             </button>
           )}
+          <button className="btn btn-ghost" onClick={() => setExpense('new')}>
+            <Icon name="wallet" size={18} /> Registrar gasto
+          </button>
           {isOpen && (
             <>
               <button className="btn btn-ghost" onClick={() => setLoading(true)}>
@@ -129,6 +134,7 @@ export default function TripDetail() {
           { value: 'resumen', label: 'Resumen' },
           { value: 'mercancia', label: `Mercancía (${units.loaded})` },
           { value: 'ventas', label: `Ventas (${s.saleCount})` },
+          { value: 'gastos', label: `Gastos (${s.expenseList.length})` },
         ]}
       />
 
@@ -175,7 +181,20 @@ export default function TripDetail() {
             <div className="kpi">
               <span className="kpi-label">Gastos del viaje</span>
               <div className="kpi-value">{fmtMoney(s.expenses)}</div>
-              <div className="kpi-foot">Pasajes, hospedaje, comida…</div>
+              <div className="kpi-foot">
+                {s.expensesByCategory.length ? (
+                  <span>
+                    {s.expensesByCategory
+                      .slice(0, 2)
+                      .map((c) => `${categoryLabel(c.category)} ${fmtMoney(c.amount)}`)
+                      .join(' · ')}
+                  </span>
+                ) : (
+                  <button type="button" className="link-btn" onClick={() => setExpense('new')}>
+                    + Registrar gasto
+                  </button>
+                )}
+              </div>
             </div>
             <div className="kpi">
               <span className="kpi-label">Utilidad real</span>
@@ -208,6 +227,20 @@ export default function TripDetail() {
                   Además se vendieron {fmtMoney(s.credit)} a crédito sin abono en el momento.
                 </p>
               )}
+              <div className="cash-box">
+                <div className="row-between">
+                  <span>Efectivo recibido</span>
+                  <span>{fmtMoney(methods.efectivo)}</span>
+                </div>
+                <div className="row-between">
+                  <span>− Gastos pagados en efectivo</span>
+                  <span>{fmtMoney(methods.efectivo - s.cashOnHand)}</span>
+                </div>
+                <div className="row-between cash-total">
+                  <span>Efectivo que deberías tener</span>
+                  <strong className={s.cashOnHand < 0 ? 'text-danger' : ''}>{fmtMoney(s.cashOnHand)}</strong>
+                </div>
+              </div>
             </section>
             <section className="card chart-card">
               <header className="chart-head">
@@ -314,6 +347,43 @@ export default function TripDetail() {
           </div>
         ))}
 
+      {tab === 'gastos' &&
+        (s.expenseList.length === 0 ? (
+          <Empty>
+            No hay gastos en este viaje.{' '}
+            <button className="btn btn-sm btn-primary" onClick={() => setExpense('new')}>
+              Registrar gasto
+            </button>
+          </Empty>
+        ) : (
+          <>
+            <ChartCard title="Gastos por categoría" subtitle={`Total ${fmtMoney(s.expenses)}${s.total ? ` · ${fmtPct((s.expenses / s.total) * 100, 1)} de lo vendido` : ''}`}>
+              <ShareBars
+                data={s.expensesByCategory.map((c) => ({ name: categoryLabel(c.category), value: c.amount, pct: s.expenses ? (c.amount / s.expenses) * 100 : 0 }))}
+              />
+            </ChartCard>
+            <div className="card flush">
+              <ul className="list">
+                {s.expenseList.map((e) => (
+                  <li key={e.id}>
+                    <button className="list-row pick-row" onClick={() => setExpense(e)}>
+                      <div>
+                        <strong>{categoryLabel(e.category)}</strong>
+                        <div className="muted small">
+                          {fmtDate(e.date)} · {methodLabel(e.method)}
+                          {e.note && ` · ${e.note}`}
+                        </div>
+                      </div>
+                      <strong>{fmtMoney(e.amount)}</strong>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </>
+        ))}
+
+      {expense && <ExpenseForm expense={expense === 'new' ? undefined : expense} tripId={trip.id} onClose={() => setExpense(null)} />}
       {loading && <LoadModal tripId={trip.id} destination={trip.destination} onClose={() => setLoading(false)} />}
       {editing && <TripForm trip={trip} onClose={() => setEditing(false)} />}
       {saleId && <SaleView saleId={saleId} onClose={() => setSaleId(null)} />}

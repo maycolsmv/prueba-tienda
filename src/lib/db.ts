@@ -1,4 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie';
+import { formatDestination } from './format';
 
 export interface Product {
   id: number;
@@ -183,6 +184,7 @@ export const db = new Dexie('tienda-ropa') as Dexie & {
   counts: EntityTable<InventoryCount, 'id'>;
   settings: EntityTable<Setting, 'key'>;
   trips: EntityTable<Trip, 'id'>;
+  expenses: EntityTable<Expense, 'id'>;
   tripItems: EntityTable<TripItem, 'id'>;
 };
 
@@ -232,6 +234,46 @@ db.version(2)
     });
   });
 
+export type ExpenseCategory = 'pasajes' | 'hospedaje' | 'comida' | 'envios' | 'empaques' | 'otros';
+
+export const EXPENSE_CATEGORIES: { value: ExpenseCategory; label: string }[] = [
+  { value: 'pasajes', label: 'Pasajes' },
+  { value: 'hospedaje', label: 'Hospedaje' },
+  { value: 'comida', label: 'Comida' },
+  { value: 'envios', label: 'Envíos' },
+  { value: 'empaques', label: 'Bolsas y empaques' },
+  { value: 'otros', label: 'Otros' },
+];
+
+export const categoryLabel = (c: ExpenseCategory) => EXPENSE_CATEGORIES.find((x) => x.value === c)?.label ?? c;
+
+export interface Expense {
+  id: number;
+  date: number;
+  category: ExpenseCategory;
+  amount: number;
+  method: PaymentMethod;
+  /** Viaje al que pertenece el gasto (null = gasto general). */
+  tripId: number | null;
+  note: string;
+  createdAt: number;
+}
+
+// Versión 3: gastos. Solo agrega una tabla; no cambia los datos existentes.
+db.version(3).stores({
+  expenses: '++id, date, category, tripId',
+});
+
+// Versión 4: destinos de viaje con mayúsculas y espacios normalizados ("malaga" → "Malaga").
+// Solo cambia el texto del destino; no toca tildes ni ningún otro dato.
+db.version(4)
+  .stores({})
+  .upgrade(async (tx) => {
+    await tx.table('trips').toCollection().modify((t: Trip) => {
+      t.destination = formatDestination(t.destination ?? '');
+    });
+  });
+
 export const TABLES = [
   'products',
   'variants',
@@ -243,4 +285,5 @@ export const TABLES = [
   'settings',
   'trips',
   'tripItems',
+  'expenses',
 ] as const;

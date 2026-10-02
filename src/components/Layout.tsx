@@ -17,6 +17,7 @@ const NAV: { to: string; label: string; icon: IconName; end?: boolean; section?:
   { to: '/productos', label: 'Productos', icon: 'products', section: 'Bodega' },
   { to: '/inventario', label: 'Inventario', icon: 'inventory' },
   { to: '/clientes', label: 'Clientes', icon: 'customers', section: 'Negocio' },
+  { to: '/gastos', label: 'Gastos', icon: 'wallet' },
   { to: '/reportes', label: 'Reportes', icon: 'reports' },
   { to: '/ajustes', label: 'Ajustes', icon: 'settings' },
 ];
@@ -32,6 +33,7 @@ const TITLES: { match: RegExp; title: string; sub: string }[] = [
   { match: /^\/inventario/, title: 'Inventario y bodega', sub: 'Existencias, entradas, conteos y movimientos' },
   { match: /^\/clientes\/\d+/, title: 'Detalle del cliente', sub: 'Compras, deudas y abonos' },
   { match: /^\/clientes/, title: 'Clientes y cartera', sub: 'Clientes registrados y saldos pendientes' },
+  { match: /^\/gastos/, title: 'Gastos', sub: 'Pasajes, hospedaje, comida, envíos y empaques' },
   { match: /^\/reportes/, title: 'Reportes', sub: 'Análisis por periodo, exportable a Excel' },
   { match: /^\/ajustes/, title: 'Ajustes', sub: 'Datos del negocio, respaldo y exportaciones' },
 ];
