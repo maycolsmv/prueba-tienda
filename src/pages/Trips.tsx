@@ -67,7 +67,7 @@ export default function Trips() {
           <table className="table stack-table">
             <thead>
               <tr>
-                <th>Destino</th>
+                <th>Viaje / ruta</th>
                 <th>Fechas</th>
                 <th className="num">Llevadas</th>
                 <th className="num">Vendidas</th>
@@ -93,11 +93,14 @@ export default function Trips() {
 function TripRow({ t }: { t: Awaited<ReturnType<typeof tripList>>[number] }) {
   const navigate = useNavigate();
   const go = () => navigate(`/viajes/${t.id}`);
+  const towns = (t.towns ?? []).filter((x) => x !== t.destination);
   return (
     <tr className="clickable-row" onClick={go} onKeyDown={(e) => e.key === 'Enter' && go()} tabIndex={0}>
-      <td data-label="Destino">
+      <td data-label="Viaje">
         <strong>{t.destination}</strong>
-        <div className="muted small">{t.saleCount} ventas</div>
+        <div className="muted small">
+          {t.saleCount} ventas{towns.length > 0 && ` · ${towns.join(', ')}`}
+        </div>
       </td>
       <td data-label="Fechas" className="nowrap">
         {tripDates(t)}
@@ -176,8 +179,8 @@ export function TripForm({ trip, onClose }: { trip?: Trip; onClose: () => void }
       }
     >
       <form id="trip-form" className="form" onSubmit={submit}>
-        <Field label="Destino *">
-          <input list="dest-list" value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="Ej: Medellín" autoFocus required />
+        <Field label="Nombre del viaje / ruta *">
+          <input list="dest-list" value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="Ej: Ruta Santander" autoFocus required />
           <datalist id="dest-list">
             {destinations?.map((d) => (
               <option key={d} value={d} />
@@ -217,7 +220,8 @@ export function TripForm({ trip, onClose }: { trip?: Trip; onClose: () => void }
         </Field>
         {!trip && (
           <p className="muted small">
-            Mientras el viaje esté abierto, las ventas se descuentan de la mercancía que cargues en él (no de bodega).
+            Mientras el viaje esté abierto, las ventas se descuentan de la mercancía que cargues en él (no de bodega). En Vender eliges el
+            pueblo donde estás vendiendo.
           </p>
         )}
       </form>

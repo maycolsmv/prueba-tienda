@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Link } from 'react-router-dom';
 import { db, type Payment, type PaymentType, type SaleItem } from '../lib/db';
-import { createSale, customerBalance, getActiveTrip, loadCatalog, type ProductWithVariants } from '../lib/ops';
+import { createSale, customerBalance, getActiveTrip, loadCatalog, setCurrentTown, type ProductWithVariants } from '../lib/ops';
 import { fmtMoney, normalize } from '../lib/format';
 import { Empty, Field, MoneyInput, PageHeader, SearchBox, useAction, useConfirm } from '../components/ui';
 import CustomerForm from '../components/CustomerForm';
 import SaleView from '../components/SaleView';
 import PaymentsEditor, { effectivePayments } from '../components/PaymentsEditor';
+import TownInput from '../components/TownInput';
 import { Icon } from '../components/Icon';
 
 function matches(p: ProductWithVariants, q: string) {
@@ -18,6 +19,10 @@ function matches(p: ProductWithVariants, q: string) {
 export default function NewSale() {
   const catalog = useLiveQuery(() => loadCatalog(), []);
   const trip = useLiveQuery(async () => (await getActiveTrip()) ?? null, []);
+  // Pueblo de la venta: en viaje arranca con el "pueblo actual"; se recuerda entre ventas.
+  const [town, setTown] = useState<string | null>(null);
+  const [editingTown, setEditingTown] = useState(false);
+  const townValue = town ?? trip?.currentTown ?? '';
   const customers = useLiveQuery(() => db.customers.orderBy('name').toArray(), []);
   const [q, setQ] = useState('');
   const [open, setOpen] = useState<number | null>(null);
@@ -104,10 +109,20 @@ export default function NewSale() {
 
   const submit = async () => {
     const sale = await run(() =>
-      createSale({ customerId, items: cart, discount, paymentType: payment, payments: effectivePayments(payments, payment, total), notes }),
+      createSale({
+        customerId,
+        items: cart,
+        discount,
+        paymentType: payment,
+        payments: effectivePayments(payments, payment, total),
+        notes,
+        town: townValue,
+      }),
     );
     if (sale) {
       reset();
+      // En viaje vuelve a tomar el pueblo actual (que ahora es el de esta venta); fuera de viaje queda vacío.
+      setTown(null);
       setDoneId(sale.id);
     }
   };
@@ -127,6 +142,32 @@ export default function NewSale() {
                 <div className="small">
                   Las ventas descuentan de la mercancía que llevas ({catalog?.reduce((a, p) => a + p.totalInTrip, 0) ?? 0} und
                   disponibles).
+                </div>
+                <div className="current-town">
+                  {editingTown ? (
+                    <div className="row gap">
+                      <div className="grow field">
+                        <TownInput value={townValue} onChange={setTown} autoFocus placeholder="¿En qué pueblo estás?" />
+                      </div>
+                      <button
+                        className="btn btn-sm btn-primary"
+                        onClick={async () => {
+                          await run(() => setCurrentTown(townValue));
+                          setTown(null);
+                          setEditingTown(false);
+                        }}
+                      >
+                        Listo
+                      </button>
+                    </div>
+                  ) : (
+                    <span>
+                      <Icon name="pin" size={15} /> Vendiendo en: <b>{townValue || 'sin pueblo'}</b> ·{' '}
+                      <button className="link-btn" onClick={() => setEditingTown(true)}>
+                        cambiar
+                      </button>
+                    </span>
+                  )}
                 </div>
               </>
             ) : (
@@ -253,6 +294,7 @@ export default function NewSale() {
                           key={c.id}
                           onClick={() => {
                             setCustomerId(c.id);
+                            if (!trip && !townValue && c.town) setTown(c.town);
                             setCustQ('');
                           }}
                         >
@@ -301,6 +343,19 @@ export default function NewSale() {
             >
               <PaymentsEditor mode={payment} total={total} value={payments} onChange={setPayments} />
             </Field>
+            {!trip && (
+              <Field label="Pueblo / ciudad" hint="Opcional. Sirve para saber quién te debe en cada pueblo.">
+                <TownInput value={townValue} onChange={setTown} />
+              </Field>
+            )}
+            {trip && (
+              <p className="muted small town-line">
+                <Icon name="pin" size={14} /> Pueblo de esta venta: <b>{townValue || 'sin pueblo'}</b>{' '}
+                <button className="link-btn" onClick={() => setEditingTown(true)}>
+                  cambiar
+                </button>
+              </p>
+            )}
             <Field label="Nota">
               <input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Opcional" />
             </Field>
@@ -344,6 +399,7 @@ export default function NewSale() {
       {newCustomer && (
         <CustomerForm
           initialName={custQ.trim()}
+          initialTown={townValue}
           onClose={() => setNewCustomer(false)}
           onSaved={(id) => {
             setCustomerId(id);

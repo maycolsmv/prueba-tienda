@@ -1,4 +1,4 @@
-import { db, migrateLedgerV2, migrateSaleV2, TABLES, type LedgerEntry, type Sale } from './db';
+import { db, migrateDataV5, migrateLedgerV2, migrateSaleV2, TABLES, type LedgerEntry, type Sale } from './db';
 import { saveSettings } from './settings';
 import { formatDestination } from './format';
 import { UserError } from './ops';
@@ -8,7 +8,7 @@ const FORMAT = 'tienda-ropa-respaldo';
 export async function createBackup() {
   const data: Record<string, unknown[]> = {};
   for (const t of TABLES) data[t] = await db.table(t).toArray();
-  const payload = { format: FORMAT, version: 3, createdAt: Date.now(), data };
+  const payload = { format: FORMAT, version: 5, createdAt: Date.now(), data };
   const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, '0');
@@ -59,6 +59,8 @@ export async function restoreBackup(data: Record<string, unknown[]>) {
     const t = x as { destination?: string };
     return { ...t, destination: formatDestination(t.destination ?? '') };
   });
+  data.customers = data.customers ?? [];
+  migrateDataV5(data as never);
   await db.transaction('rw', TABLES.map((t) => db.table(t)), async () => {
     for (const t of TABLES) {
       await db.table(t).clear();

@@ -9,7 +9,7 @@ import { createBackup } from '../lib/backup';
 import { fmtDate, fmtDateTime, fmtMoney, fmtNum, normalize } from '../lib/format';
 import { Empty, Modal, NumberInput, SearchBox, Tabs, useAction, useConfirm, useToast } from '../components/ui';
 import { Icon } from '../components/Icon';
-import { ChartCard, fmtPct, MethodsBar, SegmentBar, ShareBars, useChartColors } from '../components/charts';
+import { ChartCard, ChartEmpty, fmtPct, MethodsBar, SegmentBar, ShareBars, useChartColors } from '../components/charts';
 import SaleView from '../components/SaleView';
 import { TripForm, tripDates } from './Trips';
 
@@ -101,6 +101,16 @@ export default function TripDetail() {
             {tripDates(trip)}
             {trip.notes && ` · ${trip.notes}`}
           </div>
+          {!!trip.towns?.length && (
+            <div className="route-towns">
+              {trip.towns.map((t) => (
+                <span key={t} className={`badge no-dot ${t === trip.currentTown && isOpen ? 'badge-info' : 'badge-neutral'}`}>
+                  {t}
+                  {t === trip.currentTown && isOpen ? ' · aquí' : ''}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         <div className="page-actions">
           <button className="btn btn-ghost btn-sm" onClick={() => setEditing(true)}>
@@ -212,6 +222,40 @@ export default function TripDetail() {
               </div>
             </div>
           </div>
+
+          <ChartCard title="Ventas por pueblo" subtitle={`${s.byTown.length} ${s.byTown.length === 1 ? 'pueblo' : 'pueblos'} · % del total vendido en el viaje`}>
+            {s.byTown.length ? (
+              <>
+                <ShareBars data={s.byTown.map((t) => ({ name: t.town ?? 'Sin pueblo', value: t.total, pct: t.pct }))} />
+                <div className="table-wrap">
+                  <table className="table compact">
+                    <thead>
+                      <tr>
+                        <th>Pueblo</th>
+                        <th className="num">Ventas</th>
+                        <th className="num">Unidades</th>
+                        <th className="num">Valor</th>
+                        <th className="num">%</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {s.byTown.map((t) => (
+                        <tr key={t.town ?? '-'}>
+                          <td>{t.town ?? <span className="muted">Sin pueblo</span>}</td>
+                          <td className="num">{t.sales}</td>
+                          <td className="num">{t.units}</td>
+                          <td className="num">{fmtMoney(t.total)}</td>
+                          <td className="num">{fmtPct(t.pct, 1)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : (
+              <ChartEmpty icon="pin" text="Aún no hay ventas en este viaje." />
+            )}
+          </ChartCard>
 
           <div className="dash-grid">
             <section className="card chart-card">
@@ -330,6 +374,7 @@ export default function TripDetail() {
                   <button className={`list-row pick-row ${x.voided ? 'voided' : ''}`} onClick={() => setSaleId(x.id)}>
                     <div>
                       <strong>#{x.number}</strong> {x.customerName && <span>· {x.customerName}</span>}
+                      {x.town && <span className="badge no-dot badge-neutral town-badge">{x.town}</span>}
                       <div className="muted small">
                         {fmtDateTime(x.date)} · {x.items.reduce((a, i) => a + i.qty, 0)} und
                       </div>

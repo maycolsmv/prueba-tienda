@@ -95,33 +95,34 @@ const PRODUCTS: [string, string, string, number, number, string[], number, numbe
 // Productos que no se reponen en la demostración (terminan agotados o con poco stock).
 const NO_RESTOCK = ['DEMO-VES02', 'DEMO-CHA01', 'DEMO-PIJ01', 'DEMO-CMS02'];
 
-// [nombre, celular, ciudad]
+// [nombre, celular, pueblo] — "Local" = clientes de la ciudad donde está la bodega (sin pueblo)
 const CUSTOMERS: [string, string, string][] = [
   ['Laura Gómez', '3001234567', 'Medellín'],
   ['Andrés Restrepo', '3109876543', 'Medellín'],
-  ['Carolina Pérez', '3157654321', 'Medellín'],
-  ['Juan David Rojas', '3204567890', 'Medellín'],
-  ['María Fernanda López', '3012345678', 'Medellín'],
+  ['Carolina Pérez', '3157654321', 'Rionegro'],
+  ['Juan David Rojas', '3204567890', 'Rionegro'],
+  ['María Fernanda López', '3012345678', 'Envigado'],
   ['Sebastián Torres', '3123456789', 'Cali'],
   ['Valentina Castro', '3165432198', 'Cali'],
-  ['Daniela Morales', '3176543210', 'Cali'],
-  ['Camilo Herrera', '3008765432', 'Cali'],
+  ['Daniela Morales', '3176543210', 'Palmira'],
+  ['Camilo Herrera', '3008765432', 'Tuluá'],
   ['Natalia Vargas', '3187654321', 'Bucaramanga'],
-  ['Felipe Ramírez', '3198765432', 'Bucaramanga'],
-  ['Paula Andrea Ruiz', '3112345678', 'Bucaramanga'],
+  ['Felipe Ramírez', '3198765432', 'San Gil'],
+  ['Paula Andrea Ruiz', '3112345678', 'Barichara'],
+  ['Luisa Fernanda Díaz', '3172223344', 'San Gil'],
   ['Santiago Jiménez', '3145678901', 'Local'],
   ['Isabella Ortiz', '3056789012', 'Local'],
   ['Alejandra Mejía', '3134567890', 'Local'],
 ];
 
-// Viajes: [destino, día de salida (desde el inicio), días de duración, notas]. El último queda abierto.
-export type DemoTrip = [destino: string, diaSalida: number, dias: number, notas: string];
+// Viajes (rutas): [nombre, día de salida (desde el inicio), días de duración, notas, pueblos]. El último queda abierto.
+export type DemoTrip = [nombre: string, diaSalida: number, dias: number, notas: string, pueblos?: string[]];
 
 const DEFAULT_TRIPS: DemoTrip[] = [
-  ['Medellín', 8, 6, 'Feria de El Poblado y ventas a domicilio'],
-  ['Cali', 33, 5, 'Hotel en Granada'],
-  ['Medellín', 60, 6, 'Segunda visita: llevar más jeans'],
-  ['Bucaramanga', 97, 6, 'Primera vez en la ciudad'],
+  ['Ruta Antioquia', 8, 6, 'Feria de El Poblado y ventas a domicilio', ['Medellín', 'Rionegro', 'Envigado']],
+  ['Ruta Valle', 33, 5, 'Hotel en Granada (Cali)', ['Cali', 'Palmira', 'Tuluá']],
+  ['Ruta Antioquia', 60, 6, 'Segunda visita: llevar más jeans', ['Medellín', 'Rionegro', 'Envigado']],
+  ['Ruta Santander', 97, 6, 'Primera vez por Santander', ['Bucaramanga', 'San Gil', 'Barichara']],
 ];
 
 const METHODS: [PaymentMethod, number][] = [
@@ -198,10 +199,15 @@ export async function loadDemoData(opts: DemoOptions = {}) {
     const vIndex = new Map(variantIds.map((id, i) => [id, i]));
 
     // ---------- Viajes ----------
-    const tripRows = TRIPS.map(([destination, d, len, notes], i) => {
+    const tripRows = TRIPS.map(([destination, d, len, notes, route], i) => {
       const isLast = lastOpen && i === TRIPS.length - 1;
+      const towns = route ?? [destination];
+      // En el viaje abierto, el pueblo actual es el que toca hoy según la ruta
+      const today = Math.floor((now - start) / DAY);
       return {
         destination,
+        towns,
+        currentTown: isLast ? towns[Math.min(towns.length - 1, Math.floor(((today - d) * towns.length) / len))] : null,
         startDate: dayAt(d),
         endDate: dayAt(d + len - 1),
         notes,
@@ -239,8 +245,9 @@ export async function loadDemoData(opts: DemoOptions = {}) {
         name,
         phone,
         document: String(1_000_000_000 + Math.floor(r() * 99_999_999)),
-        address: city === 'Local' ? '' : city,
-        notes: `Cliente de demostración${city === 'Local' ? '' : ` · ${city}`}`,
+        address: '',
+        notes: 'Cliente de demostración',
+        town: city === 'Local' ? null : city,
         createdAt: start - (10 - (i % 10)) * DAY,
       })) as Customer[],
       { allKeys: true },
@@ -255,6 +262,12 @@ export async function loadDemoData(opts: DemoOptions = {}) {
     const firstSaleNumber = number;
 
     const tripOn = (day: number) => TRIPS.findIndex(([, d, len]) => day >= d && day < d + len);
+    const routeOf = (ti: number) => TRIPS[ti][4] ?? [TRIPS[ti][0]];
+    const townOn = (ti: number, day: number) => {
+      const [, d, len] = TRIPS[ti];
+      const towns = routeOf(ti);
+      return towns[Math.min(towns.length - 1, Math.floor(((day - d) * towns.length) / len))];
+    };
     const tripAtDate = (t: number) => tripOn(Math.floor((t - start) / DAY));
 
     for (let day = 0; day <= DAYS; day++) {
@@ -314,7 +327,8 @@ export async function loadDemoData(opts: DemoOptions = {}) {
         const discount = r() < 0.12 ? Math.round((subtotal * (r() < 0.5 ? 0.05 : 0.1)) / 1000) * 1000 : 0;
         const total = subtotal - discount;
         const credit = r() < (trip ? 0.3 : 0.2);
-        const pool = customersIn(trip ? trip[0] : 'Local');
+        const town = trip ? townOn(ti, day) : null;
+        const pool = customersIn(town ?? 'Local');
         const ci = credit || r() < 0.4 ? pool[Math.floor(r() * pool.length)] : -1;
 
         let payments: Payment[];
@@ -345,11 +359,13 @@ export async function loadDemoData(opts: DemoOptions = {}) {
           paid,
           payments,
           tripId: null,
+          town,
+          townChanges: [],
           notes: '',
           voided: false,
         });
         saleTrip.push(trip ? ti : null);
-        const label = trip ? `Venta #${num} (${trip[0]})` : `Venta #${num}`;
+        const label = trip ? `Venta #${num} (${town})` : `Venta #${num}`;
         for (const i of items) {
           const vi = vIndex.get(i.variantId)!;
           if (trip) moveTrip(ti, vi, -i.qty, 'venta', label, date, saleIndex);
@@ -368,9 +384,9 @@ export async function loadDemoData(opts: DemoOptions = {}) {
 
         if (credit) {
           const cid = customerIds[ci];
-          ledger.push({ customerId: cid, date, type: 'cargo', amount: total, saleIndex, tripIndex: trip ? ti : null, note: `Venta a crédito #${num}`, method: null });
+          ledger.push({ customerId: cid, date, type: 'cargo', amount: total, saleIndex, tripIndex: trip ? ti : null, note: `Venta a crédito #${num}`, method: null, town });
           for (const p of payments)
-            ledger.push({ customerId: cid, date, type: 'abono', amount: p.amount, saleIndex, tripIndex: trip ? ti : null, note: `Abono inicial venta #${num}`, method: p.method });
+            ledger.push({ customerId: cid, date, type: 'abono', amount: p.amount, saleIndex, tripIndex: trip ? ti : null, note: `Abono inicial venta #${num}`, method: p.method, town });
           // Abonos posteriores según el tipo de cliente (los de otras ciudades pagan por Nequi o transferencia)
           let owed = total - paid;
           const style = payer[ci];
@@ -382,8 +398,10 @@ export async function loadDemoData(opts: DemoOptions = {}) {
             if (amount <= 0) continue;
             owed -= amount;
             const at = tripAtDate(when);
-            const m: PaymentMethod = at >= 0 && TRIPS[at][0] === CUSTOMERS[ci][2] ? 'efectivo' : r() < 0.65 ? 'nequi' : 'transferencia';
-            ledger.push({ customerId: cid, date: when, type: 'abono', amount, saleIndex: null, tripIndex: at >= 0 ? at : null, note: '', method: m });
+            // Si ese día está en su pueblo, paga en efectivo; si no, por Nequi o transferencia
+            const here = at >= 0 && townOn(at, Math.floor((when - start) / DAY)) === CUSTOMERS[ci][2];
+            const m: PaymentMethod = here ? 'efectivo' : r() < 0.65 ? 'nequi' : 'transferencia';
+            ledger.push({ customerId: cid, date: when, type: 'abono', amount, saleIndex: null, tripIndex: at >= 0 ? at : null, note: '', method: m, town });
           }
         }
       }
@@ -410,13 +428,14 @@ export async function loadDemoData(opts: DemoOptions = {}) {
     const spend = (date: number, category: Expense['category'], amount: number, m: PaymentMethod, tripIndex: number | null, note: string) => {
       if (date <= now) expenses.push({ date, category, amount: round(amount), method: m, tripIndex, note, createdAt: date });
     };
-    TRIPS.forEach(([destination, d, len], ti) => {
+    TRIPS.forEach(([, d, len], ti) => {
       const out = dayAt(d) + 5 * HOUR;
       const back = dayAt(d + len - 1) + 18 * HOUR;
       const fare = 70000 + r() * 70000;
       spend(dayAt(d - 1) + 19 * HOUR, 'empaques', 35000 + r() * 30000, 'efectivo', ti, 'Bolsas y papel de seda');
-      spend(out, 'pasajes', fare, r() < 0.6 ? 'transferencia' : 'efectivo', ti, `Bus a ${destination}`);
-      spend(dayAt(d) + 15 * HOUR, 'hospedaje', (len - 1) * (65000 + r() * 45000), r() < 0.5 ? 'transferencia' : 'nequi', ti, `Hotel ${len - 1} noches`);
+      spend(out, 'pasajes', fare, r() < 0.6 ? 'transferencia' : 'efectivo', ti, `Bus a ${routeOf(ti)[0]}`);
+      spend(dayAt(d) + 15 * HOUR, 'hospedaje', (len - 1) * (65000 + r() * 45000), r() < 0.5 ? 'transferencia' : 'nequi', ti, `Hoteles ${len - 1} noches`);
+      if (routeOf(ti).length > 1) spend(dayAt(d + Math.floor(len / 2)) + 8 * HOUR, 'pasajes', 15000 + r() * 20000, 'efectivo', ti, `Bus a ${routeOf(ti)[1]}`);
       for (let k = 0; k < len; k++) spend(dayAt(d + k) + 13 * HOUR, 'comida', 22000 + r() * 25000, r() < 0.8 ? 'efectivo' : 'nequi', ti, 'Almuerzo y comida');
       if (r() < 0.7) spend(dayAt(d + Math.floor(len / 2)) + 17 * HOUR, 'envios', 15000 + r() * 15000, 'efectivo', ti, 'Envío a clienta');
       spend(back, 'pasajes', fare, r() < 0.6 ? 'transferencia' : 'efectivo', ti, 'Bus de regreso');

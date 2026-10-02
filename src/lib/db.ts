@@ -29,6 +29,8 @@ export interface Customer {
   address: string;
   notes: string;
   createdAt: number;
+  /** Pueblo o ciudad donde vive / se le vende (null = sin pueblo). */
+  town?: string | null;
 }
 
 export interface SaleItem {
@@ -84,6 +86,10 @@ export interface Sale {
   tripId: number | null;
   notes: string;
   voided: boolean;
+  /** Pueblo o ciudad donde se hizo la venta (null = sin pueblo). */
+  town?: string | null;
+  /** Correcciones del pueblo hechas después de la venta. */
+  townChanges?: { date: number; from: string | null; to: string | null }[];
   /**
    * Cambios y devoluciones hechos después. `items`, `subtotal`, `discount` y `total`
    * reflejan la venta ya ajustada; aquí queda el historial.
@@ -130,6 +136,8 @@ export interface LedgerEntry {
   method?: PaymentMethod | null;
   /** Viaje activo cuando se registró (para saber qué se cobró en cada destino). */
   tripId?: number | null;
+  /** Pueblo de la deuda o donde se recibió el abono. */
+  town?: string | null;
 }
 
 export type MovementType =
@@ -164,7 +172,15 @@ export interface Movement {
 
 export interface Trip {
   id: number;
+  /**
+   * Nombre del viaje o ruta (ej. "Ruta Santander"). Antes de la versión 5 era el destino;
+   * se conserva el nombre del campo para no mover datos.
+   */
   destination: string;
+  /** Pueblos de la ruta (en el orden que se visitan). */
+  towns?: string[];
+  /** Pueblo donde se está vendiendo ahora (queda por defecto en las siguientes ventas). */
+  currentTown?: string | null;
   startDate: number;
   /** Regreso planeado (o real, al cerrar). */
   endDate: number | null;
@@ -311,6 +327,63 @@ db.version(4)
       t.destination = formatDestination(t.destination ?? '');
     });
   });
+
+/**
+ * Versión 5: pueblo en ventas, abonos y clientes; los viajes pasan a ser rutas con varios pueblos.
+ * - El destino de cada viaje queda como su nombre y como primer pueblo de la ruta.
+ * - Las ventas de un viaje quedan en ese pueblo; las ventas sin viaje, sin pueblo.
+ * - La cartera toma el pueblo de su venta (o del viaje en que se cobró).
+ * - Cada cliente toma el pueblo de su última venta con pueblo.
+ * No se borra ni se cambia ningún otro dato.
+ */
+db.version(5)
+  .stores({
+    sales: '++id, &number, date, customerId, tripId, town',
+    ledger: '++id, customerId, date, saleId, tripId, town',
+    customers: '++id, name, phone, document, town',
+  })
+  .upgrade(async (tx) => {
+    const data = {
+      trips: (await tx.table('trips').toArray()) as Partial<Trip>[],
+      sales: (await tx.table('sales').toArray()) as Partial<Sale>[],
+      ledger: (await tx.table('ledger').toArray()) as Partial<LedgerEntry>[],
+      customers: (await tx.table('customers').toArray()) as Partial<Customer>[],
+    };
+    migrateDataV5(data);
+    await tx.table('trips').bulkPut(data.trips);
+    await tx.table('sales').bulkPut(data.sales);
+    await tx.table('ledger').bulkPut(data.ledger);
+    await tx.table('customers').bulkPut(data.customers);
+  });
+
+/** Completa los datos de antes de la versión 5 (también se usa al restaurar respaldos viejos). */
+export function migrateDataV5(data: {
+  trips: Partial<Trip>[];
+  sales: Partial<Sale>[];
+  ledger: Partial<LedgerEntry>[];
+  customers: Partial<Customer>[];
+}) {
+  const tripTown = new Map(data.trips.map((t) => [t.id, formatDestination(t.destination ?? '') || null]));
+  for (const t of data.trips) {
+    if (!Array.isArray(t.towns)) t.towns = t.destination ? [formatDestination(t.destination)] : [];
+    if (t.currentTown === undefined) t.currentTown = null;
+  }
+  const saleTown = new Map<number, string | null>();
+  const lastTown = new Map<number, { date: number; town: string }>();
+  for (const x of data.sales) {
+    if (x.town === undefined) x.town = x.tripId ? (tripTown.get(x.tripId) ?? null) : null;
+    if (!Array.isArray(x.townChanges)) x.townChanges = [];
+    saleTown.set(x.id!, x.town ?? null);
+    if (x.customerId && x.town) {
+      const prev = lastTown.get(x.customerId);
+      if (!prev || (x.date ?? 0) > prev.date) lastTown.set(x.customerId, { date: x.date ?? 0, town: x.town });
+    }
+  }
+  for (const e of data.ledger)
+    if (e.town === undefined) e.town = e.saleId ? (saleTown.get(e.saleId) ?? null) : e.tripId ? (tripTown.get(e.tripId) ?? null) : null;
+  for (const c of data.customers) if (c.town === undefined) c.town = lastTown.get(c.id!)?.town ?? null;
+  return data;
+}
 
 export const TABLES = [
   'products',

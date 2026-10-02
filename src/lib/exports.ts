@@ -28,6 +28,7 @@ function salesSheets(sales: Sale[], tripNames: Map<number, string>): Sheet[] {
         Numero: s.number,
         Fecha: fmtDateTime(s.date),
         Cliente: s.customerName,
+        Pueblo: s.town ?? '',
         Pago: s.paymentType === 'credito' ? 'Crédito' : 'Contado',
         Unidades: s.items.reduce((a, i) => a + i.qty, 0),
         Subtotal: s.subtotal,
@@ -109,6 +110,7 @@ async function customerSheets(): Promise<Sheet[]> {
       name: 'Clientes',
       rows: customers.map((c) => ({
         Nombre: c.name,
+        Pueblo: c.town ?? '',
         Celular: c.phone,
         Documento: c.document,
         Direccion: c.address,
@@ -123,6 +125,7 @@ async function customerSheets(): Promise<Sheet[]> {
         .map((e) => ({
           Fecha: fmtDateTime(e.date),
           Cliente: names.get(e.customerId) ?? '',
+          Pueblo: e.town ?? '',
           Tipo: e.type === 'cargo' ? 'Deuda' : 'Abono',
           Valor: e.amount,
           Medio: e.type === 'abono' ? methodLabel(e.method) : '',

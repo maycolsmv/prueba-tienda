@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, methodLabel, PAYMENT_METHODS, type PaymentMethod } from '../lib/db';
-import { addLedgerEntry } from '../lib/ops';
+import { addLedgerEntry, getActiveTrip } from '../lib/ops';
+import TownInput from '../components/TownInput';
 import { fmtDateTime, fmtMoney } from '../lib/format';
 import { waNumber } from '../lib/receipt';
 import { useSettings } from '../lib/settings';
@@ -59,7 +60,7 @@ export default function CustomerDetail() {
         <div>
           <h1>{customer.name}</h1>
           <div className="muted small">
-            {[customer.phone, customer.document, customer.address].filter(Boolean).join(' · ')}
+            {[customer.town, customer.phone, customer.document, customer.address].filter(Boolean).join(' · ')}
           </div>
         </div>
         <div className="page-actions">
@@ -167,7 +168,9 @@ export default function CustomerDetail() {
           </div>
         ))}
 
-      {entry && <LedgerModal customerId={id} type={entry} balance={balance} onClose={() => setEntry(null)} />}
+      {entry && (
+        <LedgerModal customerId={id} type={entry} balance={balance} defaultTown={customer.town ?? ''} onClose={() => setEntry(null)} />
+      )}
       {editing && <CustomerForm customer={customer} onClose={() => setEditing(false)} />}
       {saleId && <SaleView saleId={saleId} onClose={() => setSaleId(null)} />}
     </div>
@@ -178,20 +181,26 @@ function LedgerModal({
   customerId,
   type,
   balance,
+  defaultTown,
   onClose,
 }: {
   customerId: number;
   type: 'cargo' | 'abono';
   balance: number;
+  defaultTown: string;
   onClose: () => void;
 }) {
   const [amount, setAmount] = useState(0);
+  // En viaje, el abono se registra en el pueblo donde estás; si no, en el pueblo del cliente.
+  const trip = useLiveQuery(async () => (await getActiveTrip()) ?? null, []);
+  const [townInput, setTownInput] = useState<string | null>(null);
+  const town = townInput ?? (trip?.currentTown || defaultTown);
   const [note, setNote] = useState('');
   const [method, setMethod] = useState<PaymentMethod>('efectivo');
   const { run, busy } = useAction();
   const save = async () => {
     const ok = await run(async () => {
-      await addLedgerEntry(customerId, type, amount, note, type === 'abono' ? method : null);
+      await addLedgerEntry(customerId, type, amount, note, type === 'abono' ? method : null, town);
       return true;
     }, type === 'abono' ? 'Abono registrado' : 'Deuda registrada');
     if (ok) onClose();
@@ -240,6 +249,9 @@ function LedgerModal({
             </div>
           </Field>
         )}
+        <Field label="Pueblo">
+          <TownInput value={town} onChange={setTownInput} />
+        </Field>
         <Field label={type === 'abono' ? 'Nota (opcional)' : 'Concepto'}>
           <input value={note} onChange={(e) => setNote(e.target.value)} />
         </Field>

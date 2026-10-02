@@ -2,13 +2,14 @@ import { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Link } from 'react-router-dom';
 import { db, methodLabel, type Sale, type SaleAdjustment } from '../lib/db';
-import { customerBalance, voidSale } from '../lib/ops';
+import { customerBalance, setSaleTown, voidSale } from '../lib/ops';
 import { buildReceiptPdf, receiptFileName, shareReceipt } from '../lib/receipt';
 import { getSettings, useSettings } from '../lib/settings';
 import { fmtDateTime, fmtMoney } from '../lib/format';
 import { Modal, Tabs, useAction, useConfirm } from './ui';
 import ReceiptPreview from './ReceiptPreview';
 import AdjustSale from './AdjustSale';
+import TownInput from './TownInput';
 import { Icon } from './Icon';
 
 export default function SaleView({ saleId, onClose, justCreated }: { saleId: number; onClose: () => void; justCreated?: boolean }) {
@@ -18,6 +19,7 @@ export default function SaleView({ saleId, onClose, justCreated }: { saleId: num
   const { run, busy } = useAction();
   const confirm = useConfirm();
   const [adjusting, setAdjusting] = useState<'cambio' | 'devolucion' | null>(null);
+  const [editTown, setEditTown] = useState<string | null>(null);
   const settings = useSettings();
   const [view, setView] = useState<'resumen' | 'comprobante'>(justCreated ? 'comprobante' : 'resumen');
   const balance = useLiveQuery(
@@ -121,6 +123,37 @@ export default function SaleView({ saleId, onClose, justCreated }: { saleId: num
           )}
         </div>
         <div className="row-between">
+          <span>Pueblo</span>
+          {editTown !== null ? (
+            <div className="row gap town-edit">
+              <div className="field grow">
+                <TownInput value={editTown} onChange={setEditTown} autoFocus />
+              </div>
+              <button
+                className="btn btn-sm btn-primary"
+                onClick={async () => {
+                  const ok = await run(async () => {
+                    await setSaleTown(sale.id, editTown);
+                    return true;
+                  }, 'Pueblo actualizado');
+                  if (ok) setEditTown(null);
+                }}
+              >
+                Guardar
+              </button>
+            </div>
+          ) : (
+            <span>
+              {sale.town ?? <span className="muted">Sin pueblo</span>}{' '}
+              {!sale.voided && (
+                <button className="link-btn small" onClick={() => setEditTown(sale.town ?? '')}>
+                  {sale.town ? 'cambiar' : 'agregar'}
+                </button>
+              )}
+            </span>
+          )}
+        </div>
+        <div className="row-between">
           <span>Pago</span>
           <span className={`badge ${sale.paymentType === 'credito' ? 'badge-warn' : 'badge-ok'}`}>
             {sale.paymentType === 'credito' ? 'Crédito' : 'Contado'}
@@ -188,6 +221,16 @@ export default function SaleView({ saleId, onClose, justCreated }: { saleId: num
           </div>
         )}
         {sale.notes && <p className="muted small">Nota: {sale.notes}</p>}
+        {!!sale.townChanges?.length && (
+          <p className="muted small">
+            {sale.townChanges.map((c, k) => (
+              <span key={k}>
+                Pueblo cambiado el {fmtDateTime(c.date)}: {c.from ?? 'sin pueblo'} → {c.to ?? 'sin pueblo'}
+                <br />
+              </span>
+            ))}
+          </p>
+        )}
         {!!sale.adjustments?.length && (
           <div className="adj-history">
             <h3 className="adj-title">Cambios y devoluciones</h3>

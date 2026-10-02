@@ -28,6 +28,7 @@ export default function Sales() {
         (!n ||
           String(s.number).includes(n) ||
           normalize(s.customerName).includes(n) ||
+          normalize(s.town ?? '').includes(n) ||
           s.items.some((i) => normalize(`${i.name} ${i.reference}`).includes(n))),
     );
   }, [sales, q, pay]);
@@ -61,7 +62,7 @@ export default function Sales() {
             </select>
           </Field>
         </div>
-        <SearchBox value={q} onChange={setQ} placeholder="Buscar por número, cliente o producto" />
+        <SearchBox value={q} onChange={setQ} placeholder="Buscar por número, cliente, pueblo o producto" />
       </div>
 
       <div className="kpis">
@@ -102,6 +103,7 @@ export default function Sales() {
                 <th>Venta</th>
                 <th>Fecha</th>
                 <th>Cliente</th>
+                <th>Pueblo</th>
                 <th className="num">Und</th>
                 <th>Pago</th>
                 <th className="num">Total</th>
@@ -123,6 +125,7 @@ export default function Sales() {
                     {fmtDateTime(s.date)}
                   </td>
                   <td data-label="Cliente">{s.customerName || <span className="muted">Sin cliente</span>}</td>
+                  <td data-label="Pueblo">{s.town ?? <span className="muted">—</span>}</td>
                   <td data-label="Unidades" className="num">
                     {s.items.reduce((a, i) => a + i.qty, 0)}
                   </td>

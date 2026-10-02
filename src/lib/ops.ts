@@ -271,6 +271,7 @@ export async function saveCustomer(draft: CustomerDraft) {
     document: draft.document.trim(),
     address: draft.address.trim(),
     notes: draft.notes.trim(),
+    town: draft.town?.trim() ? (await resolveTown(draft.town)).name : null,
   };
   if (draft.id) {
     await db.customers.update(draft.id, data);
@@ -285,6 +286,7 @@ export async function addLedgerEntry(
   amount: number,
   note: string,
   method: PaymentMethod | null = null,
+  town: string | null = null,
 ) {
   if (!(amount > 0)) throw new UserError('El valor debe ser mayor a cero.');
   if (type === 'abono') {
@@ -302,6 +304,7 @@ export async function addLedgerEntry(
     note: note.trim(),
     method: type === 'abono' ? method : null,
     tripId: trip?.id ?? null,
+    town: town?.trim() ? (await resolveTown(town)).name : null,
   } as never);
 }
 
@@ -327,6 +330,8 @@ export interface SaleInput {
   /** Lo que se recibe en el momento: en contado debe sumar el total; en crédito es el abono inicial. */
   payments: Payment[];
   notes: string;
+  /** Pueblo o ciudad donde se vende. */
+  town?: string | null;
 }
 
 export async function createSale(input: SaleInput): Promise<Sale> {
@@ -365,6 +370,7 @@ export async function createSale(input: SaleInput): Promise<Sale> {
 
     const settings = await getSettings();
     const customer = input.customerId ? await db.customers.get(input.customerId) : undefined;
+    const town = input.town?.trim() ? (await resolveTown(input.town)).name : null;
     const date = Date.now();
     const sale: Omit<Sale, 'id'> = {
       number: settings.nextSaleNumber,
@@ -379,11 +385,15 @@ export async function createSale(input: SaleInput): Promise<Sale> {
       paid,
       payments,
       tripId: trip?.id ?? null,
+      town,
+      townChanges: [],
       notes: input.notes.trim(),
       voided: false,
     };
     const id = (await db.sales.add(sale as Sale)) as number;
     await saveSettings({ nextSaleNumber: settings.nextSaleNumber + 1 });
+    // En viaje, el pueblo de esta venta queda como "pueblo actual" para las siguientes.
+    if (trip && town) await rememberTripTown(trip, town);
 
     for (const i of items)
       if (trip) await moveTripStock(trip.id, i.variantId, -i.qty, 'venta', `Venta #${sale.number} (${trip.destination})`, id, date);
@@ -399,6 +409,7 @@ export async function createSale(input: SaleInput): Promise<Sale> {
         note: `Venta a crédito #${sale.number}`,
         method: null,
         tripId: trip?.id ?? null,
+        town,
       } as never);
       for (const p of payments)
         await db.ledger.add({
@@ -410,6 +421,7 @@ export async function createSale(input: SaleInput): Promise<Sale> {
           note: `Abono inicial venta #${sale.number}`,
           method: p.method,
           tripId: trip?.id ?? null,
+          town,
         } as never);
     }
     return { ...sale, id };
@@ -436,6 +448,7 @@ export async function voidSale(saleId: number) {
           amount: owed,
           saleId,
           note: `Anulación venta #${sale.number}`,
+          town: sale.town ?? null,
         } as never);
     }
     await db.sales.update(saleId, { voided: true });
@@ -566,9 +579,9 @@ export async function adjustSale(saleId: number, input: AdjustInput) {
 
     // Cartera
     if (settlement === 'deuda')
-      await db.ledger.add({ customerId: sale.customerId, date, type: 'cargo', amount: difference, saleId, note: label, method: null, tripId: trip?.id ?? null } as never);
+      await db.ledger.add({ customerId: sale.customerId, date, type: 'cargo', amount: difference, saleId, note: label, method: null, tripId: trip?.id ?? null, town: sale.town ?? null } as never);
     if (settlement === 'descuento_deuda')
-      await db.ledger.add({ customerId: sale.customerId, date, type: 'abono', amount: -difference, saleId, note: label, method: null, tripId: trip?.id ?? null } as never);
+      await db.ledger.add({ customerId: sale.customerId, date, type: 'abono', amount: -difference, saleId, note: label, method: null, tripId: trip?.id ?? null, town: sale.town ?? null } as never);
 
     const adjustment: SaleAdjustment = {
       date,
@@ -770,4 +783,69 @@ export async function saveExpense(d: ExpenseDraft) {
 
 export async function deleteExpense(id: number) {
   await db.expenses.delete(id);
+}
+
+// ---------- Pueblos ----------
+
+const accentsOf = (x: string) => x.normalize('NFD').replace(/[^\u0300-\u036f]/g, '').length;
+
+/** Pueblos ya usados en ventas, clientes y rutas (un nombre por pueblo). */
+export async function knownTowns(): Promise<string[]> {
+  const [saleTowns, customers, trips] = await Promise.all([
+    db.sales.orderBy('town').uniqueKeys(),
+    db.customers.toArray(),
+    db.trips.toArray(),
+  ]);
+  const all = [
+    ...(saleTowns as string[]),
+    ...customers.map((c) => c.town ?? ''),
+    ...trips.flatMap((t) => t.towns ?? []),
+  ].filter((x): x is string => !!x);
+  const groups = new Map<string, string[]>();
+  for (const t of all) groups.set(destinationKey(t), [...(groups.get(destinationKey(t)) ?? []), t]);
+  return [...groups.values()].map((g) => canonicalDestination(g)).sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Cómo se guarda un pueblo: limpio (mayúsculas y espacios) y, si ya existe sin importar
+ * mayúsculas ni tildes, con la escritura existente ("malaga" → "Málaga"). Si lo escrito
+ * tiene más tildes que lo existente, se usa lo escrito.
+ */
+export async function resolveTown(input: string) {
+  const formatted = formatDestination(input);
+  if (!formatted) return { name: '', existing: null as string | null };
+  const key = destinationKey(formatted);
+  const existing = (await knownTowns()).find((t) => destinationKey(t) === key) ?? null;
+  if (!existing) return { name: formatted, existing };
+  return { name: accentsOf(formatted) > accentsOf(existing) ? formatted : existing, existing };
+}
+
+/** Deja un pueblo como "pueblo actual" del viaje y lo agrega a su ruta si no estaba. */
+async function rememberTripTown(trip: Trip, town: string) {
+  const towns = trip.towns ?? [];
+  const has = towns.some((t) => destinationKey(t) === destinationKey(town));
+  await db.trips.update(trip.id, { currentTown: town, towns: has ? towns : [...towns, town] });
+}
+
+/** Cambia el pueblo actual del viaje abierto (el que queda por defecto en Vender). */
+export async function setCurrentTown(town: string | null) {
+  await db.transaction('rw', [db.trips, db.sales, db.customers], async () => {
+    const trip = await getActiveTrip();
+    if (!trip) throw new UserError('No hay un viaje abierto.');
+    if (!town?.trim()) return db.trips.update(trip.id, { currentTown: null });
+    await rememberTripTown(trip, (await resolveTown(town)).name);
+  });
+}
+
+/** Corrige el pueblo de una venta ya hecha; queda en su historial y se aplica a su cartera. */
+export async function setSaleTown(saleId: number, town: string | null) {
+  await db.transaction('rw', [db.sales, db.ledger, db.customers, db.trips], async () => {
+    const sale = await db.sales.get(saleId);
+    if (!sale) throw new UserError('La venta no existe.');
+    const to = town?.trim() ? (await resolveTown(town)).name : null;
+    const from = sale.town ?? null;
+    if (to === from) return;
+    await db.sales.update(saleId, { town: to, townChanges: [...(sale.townChanges ?? []), { date: Date.now(), from, to }] });
+    await db.ledger.where('saleId').equals(saleId).modify({ town: to });
+  });
 }

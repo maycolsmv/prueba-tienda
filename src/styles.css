@@ -2222,3 +2222,32 @@ a.kpi:hover {
   gap: 3px;
   padding: 8px 0;
 }
+
+/* =========================================================
+   Pueblos
+   ========================================================= */
+.current-town {
+  margin-top: 6px;
+  font-size: 0.9rem;
+}
+.current-town svg,
+.town-line svg {
+  vertical-align: -2px;
+}
+.town-line {
+  margin: 0;
+}
+.town-edit {
+  flex: 1;
+  max-width: 280px;
+  margin-left: 12px;
+}
+.route-towns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 6px;
+}
+.town-badge {
+  margin-left: 6px;
+}

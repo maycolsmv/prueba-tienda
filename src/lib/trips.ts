@@ -35,6 +35,8 @@ export interface TripSummary {
   carteraOpen: number;
   carteraCustomers: number;
   credit: number;
+  /** Ventas por pueblo dentro del viaje (de mayor a menor valor). */
+  byTown: { town: string | null; sales: number; units: number; total: number; pct: number }[];
 }
 
 export async function tripSummary(tripId: number): Promise<TripSummary | null> {
@@ -108,6 +110,18 @@ export async function tripSummary(tripId: number): Promise<TripSummary | null> {
     carteraOpen: open.reduce((a, c) => a + c.open, 0),
     carteraCustomers: new Set(open.map((c) => c.entry.customerId)).size,
     credit: valid.filter((s) => s.paymentType === 'credito').reduce((a, s) => a + Math.max(0, s.total - s.paid), 0),
+    byTown: (() => {
+      const m = new Map<string | null, { town: string | null; sales: number; units: number; total: number }>();
+      for (const s of valid) {
+        const k = s.town ?? null;
+        const g = m.get(k) ?? { town: k, sales: 0, units: 0, total: 0 };
+        g.sales++;
+        g.units += s.items.reduce((a, i) => a + i.qty, 0);
+        g.total += s.total;
+        m.set(k, g);
+      }
+      return [...m.values()].map((g) => ({ ...g, pct: total ? (g.total / total) * 100 : 0 })).sort((a, b) => b.total - a.total);
+    })(),
   };
 }
 

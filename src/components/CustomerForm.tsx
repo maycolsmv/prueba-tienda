@@ -2,20 +2,24 @@ import { useState } from 'react';
 import type { Customer } from '../lib/db';
 import { saveCustomer, type CustomerDraft } from '../lib/ops';
 import { Field, Modal, useAction } from './ui';
+import TownInput from './TownInput';
 
 export default function CustomerForm({
   customer,
   initialName = '',
+  initialTown = '',
   onClose,
   onSaved,
 }: {
   customer?: Customer;
   initialName?: string;
+  /** Pueblo sugerido (el de la venta desde la que se crea). */
+  initialTown?: string;
   onClose: () => void;
   onSaved?: (id: number) => void;
 }) {
   const [d, setD] = useState<CustomerDraft>(
-    customer ?? { name: initialName, phone: '', document: '', address: '', notes: '' },
+    customer ? { ...customer, town: customer.town ?? '' } : { name: initialName, phone: '', document: '', address: '', notes: '', town: initialTown },
   );
   const { run, busy } = useAction();
   const set = (k: keyof CustomerDraft) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
@@ -57,6 +61,9 @@ export default function CustomerForm({
             <input value={d.document} onChange={set('document')} />
           </Field>
         </div>
+        <Field label="Pueblo / ciudad">
+          <TownInput value={d.town ?? ''} onChange={(town) => setD({ ...d, town })} />
+        </Field>
         <Field label="Dirección">
           <input value={d.address} onChange={set('address')} />
         </Field>

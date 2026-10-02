@@ -24,7 +24,7 @@ export default function Customers() {
     const n = normalize(q);
     return data.customers
       .map((c) => ({ ...c, balance: data.balances.get(c.id) ?? 0 }))
-      .filter((c) => (filter === 'todos' || c.balance > 0) && (!n || normalize(`${c.name} ${c.phone} ${c.document}`).includes(n)))
+      .filter((c) => (filter === 'todos' || c.balance > 0) && (!n || normalize(`${c.name} ${c.phone} ${c.document} ${c.town ?? ''}`).includes(n)))
       .sort((a, b) => (filter === 'deben' ? b.balance - a.balance : 0));
   }, [data, q, filter]);
 
@@ -91,7 +91,7 @@ export default function Customers() {
         ]}
       />
       <div className="card filters">
-        <SearchBox value={q} onChange={setQ} placeholder="Buscar por nombre, celular o documento" />
+        <SearchBox value={q} onChange={setQ} placeholder="Buscar por nombre, pueblo, celular o documento" />
       </div>
       {data && list.length === 0 ? (
         <Empty>{filter === 'deben' ? 'Ningún cliente tiene saldo pendiente.' : 'No hay clientes registrados.'}</Empty>
@@ -105,7 +105,7 @@ export default function Customers() {
                     <span className="avatar">{c.name.slice(0, 1).toUpperCase()}</span>
                     <div>
                       <strong>{c.name}</strong>
-                      <div className="muted small">{[c.phone, c.document].filter(Boolean).join(' · ') || 'Sin datos de contacto'}</div>
+                      <div className="muted small">{[c.town, c.phone, c.document].filter(Boolean).join(' · ') || 'Sin datos de contacto'}</div>
                     </div>
                   </div>
                   <div className="right">
